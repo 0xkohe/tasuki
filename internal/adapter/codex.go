@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,6 +19,7 @@ type Codex struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	process *os.Process
+	opts    Options
 }
 
 // codexEvent represents a single JSONL event from codex exec --json.
@@ -44,8 +44,8 @@ type codexEvent struct {
 	} `json:"error,omitempty"`
 }
 
-func NewCodex() *Codex {
-	return &Codex{}
+func NewCodex(opts Options) *Codex {
+	return &Codex{opts: opts}
 }
 
 func (c *Codex) Name() string {
@@ -75,6 +75,9 @@ func (c *Codex) SendInput(sess *InteractiveSession, text string) error {
 
 func (c *Codex) RunInteractive(ctx context.Context, workDir string, initialPrompt string) (*InteractiveSession, error) {
 	args := []string{}
+	if c.opts.PreserveScrollback {
+		args = append(args, "--no-alt-screen")
+	}
 	if initialPrompt != "" {
 		args = append(args, initialPrompt)
 	}
@@ -102,13 +105,15 @@ func (c *Codex) RunInteractive(ctx context.Context, workDir string, initialPromp
 
 	events := make(chan Event, 16)
 	done := make(chan struct{})
+	capture := newPassthroughCapture()
+	inputProxy, err := startInputProxy(os.Stdin, ptmx, capture)
+	if err != nil {
+		ptmx.Close()
+		return nil, fmt.Errorf("codex: start input proxy: %w", err)
+	}
 
-	monitor := newOutputMonitor(ptmx, os.Stdout, events)
+	monitor := newOutputMonitor(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold)
 	go monitor.Run()
-
-	go func() {
-		_, _ = io.Copy(ptmx, os.Stdin)
-	}()
 
 	go func() {
 		_ = cmd.Wait()
@@ -123,7 +128,11 @@ func (c *Codex) RunInteractive(ctx context.Context, workDir string, initialPromp
 		Resize: func(rows, cols uint16) {
 			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 		},
+		Snapshot: func() PassthroughSnapshot {
+			return capture.Snapshot(monitor.RecentOutput())
+		},
 		Close: func() error {
+			_ = inputProxy.Stop()
 			ptmx.Close()
 			if cmd.Process != nil {
 				return cmd.Process.Kill()

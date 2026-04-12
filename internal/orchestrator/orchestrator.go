@@ -40,7 +40,7 @@ func New(cfg *config.Config, workDir string) (*Orchestrator, error) {
 		return nil, fmt.Errorf("no providers configured")
 	}
 
-	providers := initProviders(providerNames)
+	providers := initProviders(cfg)
 	if len(providers) == 0 {
 		return nil, fmt.Errorf("no available providers found (checked: %v)", providerNames)
 	}
@@ -76,7 +76,12 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 		provider := o.currentProvider()
 		providerName := provider.Name()
 
-		ui.InfoMessage(fmt.Sprintf("starting %s (provider %d/%d)", providerName, o.current+1, len(o.providers)))
+		withHandoff := o.session.HandoffCount > 0
+		if withHandoff {
+			ui.InfoMessage(fmt.Sprintf("loading %s with handoff context (provider %d/%d)", providerName, o.current+1, len(o.providers)))
+		} else {
+			ui.InfoMessage(fmt.Sprintf("starting %s (provider %d/%d)", providerName, o.current+1, len(o.providers)))
+		}
 		fmt.Println()
 
 		// Build the prompt for this provider
@@ -110,6 +115,8 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 			continue
 		}
 
+		ui.ProviderReady(providerName, withHandoff)
+
 		// Handle terminal resize (SIGWINCH)
 		sigWinch := make(chan os.Signal, 1)
 		signal.Notify(sigWinch, syscall.SIGWINCH)
@@ -124,6 +131,8 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 		// Monitor for rate limit events while the CLI runs.
 		// When detected, terminate the current provider immediately and fail over.
 		rateLimited := false
+		rateLimitType := "unknown"
+		rateLimitDetail := ""
 
 	waitLoop:
 		for {
@@ -134,6 +143,10 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 				}
 				if evt.Type == adapter.EventRateLimit {
 					rateLimited = true
+					if evt.RateLimit != nil && evt.RateLimit.Type != "" {
+						rateLimitType = evt.RateLimit.Type
+					}
+					rateLimitDetail = evt.Content
 					_ = sess.Close()
 					break waitLoop
 				}
@@ -146,6 +159,14 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 				signal.Stop(sigWinch)
 				return nil
 			}
+		}
+
+		if sess.Snapshot != nil {
+			snapshot := sess.Snapshot()
+			o.session.LastOutput = snapshot.RecentOutput
+			o.session.RecentTranscript = snapshot.RecentTranscript
+			o.session.RecentSummary = snapshot.Summary
+			_ = o.store.SaveSession(o.session)
 		}
 
 		// Cleanup
@@ -164,8 +185,7 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 		}
 
 		// Rate limit was detected during this session.
-		fmt.Println()
-		ui.RateLimitWarning(providerName, "detected from output")
+		ui.RateLimitWarning(providerName, rateLimitType, rateLimitDetail)
 
 		if err := o.switchProvider("rate_limited"); err != nil {
 			return err
@@ -308,13 +328,13 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 				if evt.RateLimit != nil {
 					limitType = evt.RateLimit.Type
 				}
-				ui.RateLimitWarning(provider.Name(), limitType)
+				ui.RateLimitWarning(provider.Name(), limitType, evt.Content)
 				needSwitch = true
 				switchReason = "rate_limited"
 
 			case adapter.EventError:
 				if isLikelyRateLimit(evt.Content) {
-					ui.RateLimitWarning(provider.Name(), "detected_from_error")
+					ui.RateLimitWarning(provider.Name(), "detected_from_error", evt.Content)
 					needSwitch = true
 					switchReason = "rate_limited"
 				} else {

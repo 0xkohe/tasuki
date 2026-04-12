@@ -17,6 +17,7 @@ import (
 func main() {
 	var providerFlag string
 	var pipeMode bool
+	var initGlobal bool
 
 	rootCmd := &cobra.Command{
 		Use:   "unblocked [prompt]",
@@ -77,18 +78,27 @@ provider automatically.`,
 		Use:   "init",
 		Short: "Initialize unblocked configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := config.Default()
+			if initGlobal {
+				if err := cfg.SaveGlobal(); err != nil {
+					return err
+				}
+				ui.InfoMessage("initialized " + config.GlobalPath())
+				return nil
+			}
+
 			workDir, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			cfg := config.Default()
-			if err := cfg.Save(workDir); err != nil {
+			if err := cfg.SaveLocal(workDir); err != nil {
 				return err
 			}
-			ui.InfoMessage("initialized .unblocked/config.yaml")
+			ui.InfoMessage("initialized " + config.LocalPath(workDir))
 			return nil
 		},
 	}
+	initCmd.Flags().BoolVar(&initGlobal, "global", false, "write config to the global path instead of the current project")
 
 	statusCmd := &cobra.Command{
 		Use:   "status",

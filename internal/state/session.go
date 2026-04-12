@@ -17,19 +17,21 @@ type ProviderEntry struct {
 
 // Session represents the canonical state of an ongoing task.
 type Session struct {
-	SessionID       string          `json:"session_id"`
-	Goal            string          `json:"goal"`
-	Constraints     []string        `json:"constraints"`
-	CompletedSteps  []string        `json:"completed_steps"`
-	PendingSteps    []string        `json:"pending_steps"`
-	FilesTouched    []string        `json:"files_touched"`
-	Decisions       []Decision      `json:"decisions"`
-	CurrentProvider string          `json:"current_provider"`
-	ProviderHistory []ProviderEntry `json:"provider_history"`
-	HandoffCount    int             `json:"handoff_count"`
-	LastOutput      string          `json:"last_output"`
-	CreatedAt       string          `json:"created_at"`
-	UpdatedAt       string          `json:"updated_at"`
+	SessionID        string          `json:"session_id"`
+	Goal             string          `json:"goal"`
+	Constraints      []string        `json:"constraints"`
+	CompletedSteps   []string        `json:"completed_steps"`
+	PendingSteps     []string        `json:"pending_steps"`
+	FilesTouched     []string        `json:"files_touched"`
+	Decisions        []Decision      `json:"decisions"`
+	CurrentProvider  string          `json:"current_provider"`
+	ProviderHistory  []ProviderEntry `json:"provider_history"`
+	HandoffCount     int             `json:"handoff_count"`
+	RecentSummary    string          `json:"recent_summary"`
+	RecentTranscript string          `json:"recent_transcript"`
+	LastOutput       string          `json:"last_output"`
+	CreatedAt        string          `json:"created_at"`
+	UpdatedAt        string          `json:"updated_at"`
 }
 
 // NewSession creates a new session with defaults.

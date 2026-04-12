@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -19,6 +18,7 @@ type Claude struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	process *os.Process
+	opts    Options
 }
 
 // claudeStreamEvent represents a single JSONL event from claude --output-format stream-json.
@@ -57,8 +57,8 @@ type claudeStreamEvent struct {
 	} `json:"rate_limit_event,omitempty"`
 }
 
-func NewClaude() *Claude {
-	return &Claude{}
+func NewClaude(opts Options) *Claude {
+	return &Claude{opts: opts}
 }
 
 func (c *Claude) Name() string {
@@ -129,15 +129,17 @@ func (c *Claude) RunInteractive(ctx context.Context, workDir string, initialProm
 
 	events := make(chan Event, 16)
 	done := make(chan struct{})
+	capture := newPassthroughCapture()
+	inputProxy, err := startInputProxy(os.Stdin, ptmx, capture)
+	if err != nil {
+		ptmx.Close()
+		restoreOverride()
+		return nil, fmt.Errorf("claude: start input proxy: %w", err)
+	}
 
 	// Monitor output for rate limit patterns
-	monitor := newOutputMonitor(ptmx, os.Stdout, events)
+	monitor := newOutputMonitor(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold)
 	go monitor.Run()
-
-	// Proxy user input to PTY
-	go func() {
-		_, _ = io.Copy(ptmx, os.Stdin)
-	}()
 
 	// Wait for process exit
 	go func() {
@@ -154,8 +156,12 @@ func (c *Claude) RunInteractive(ctx context.Context, workDir string, initialProm
 		Resize: func(rows, cols uint16) {
 			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 		},
+		Snapshot: func() PassthroughSnapshot {
+			return capture.Snapshot(monitor.RecentOutput())
+		},
 		Close: func() error {
 			restoreOverride()
+			_ = inputProxy.Stop()
 			ptmx.Close()
 			if cmd.Process != nil {
 				return cmd.Process.Kill()

@@ -47,8 +47,22 @@ func ProviderStatus(name string, index, total int) {
 // SwitchNotice prints a provider switch notification.
 func SwitchNotice(from, to, reason string) {
 	fmt.Println()
-	fmt.Printf(Yellow+Bold+"[unblocked]"+Reset+" switching: %s -> %s (%s)\n", from, to, reason)
+	fmt.Printf(Cyan+Bold+"[unblocked]"+Reset+" failover: %s -> %s"+Dim+" (%s)"+Reset+"\n", from, to, reason)
 	fmt.Println()
+}
+
+// FailoverStep prints a loading-style failover step.
+func FailoverStep(step, total int, label string) {
+	fmt.Printf(Dim+"[loading] "+Reset+"[%d/%d] %s...\n", step, total, label)
+}
+
+// ProviderReady prints that the next provider is ready to take over.
+func ProviderReady(name string, handoff bool) {
+	if handoff {
+		fmt.Printf(Green+"[ready] "+Reset+"%s handoff loaded. interactive session starting\n", name)
+		return
+	}
+	fmt.Printf(Green+"[ready] "+Reset+"%s interactive session starting\n", name)
 }
 
 // MessageContent prints agent output text.
@@ -70,13 +84,29 @@ func InfoMessage(msg string) {
 }
 
 // RateLimitWarning prints a rate limit warning.
-func RateLimitWarning(provider, limitType string) {
-	fmt.Printf(Yellow+"[rate limit] "+Reset+"%s hit rate limit (%s)\n", provider, limitType)
+func RateLimitWarning(provider, limitType, detail string) {
+	fmt.Println()
+	fmt.Println(Yellow + Bold + "[unblocked] Rate Limit Detected" + Reset)
+	fmt.Printf(Dim+"provider: "+Reset+"%s\n", provider)
+	fmt.Printf(Dim+"trigger:  "+Reset+"%s\n", limitType)
+	if detail != "" {
+		fmt.Printf(Dim+"matched:  "+Reset+"%s\n", trimForDisplay(detail, 120))
+	}
+	fmt.Printf(Dim + "action:   " + Reset + "stop current provider, save handoff, continue with next provider\n")
+	fmt.Println()
 }
 
 // HandoffSaved prints notification of handoff save.
 func HandoffSaved(path string) {
-	fmt.Printf(Dim+"[unblocked] handoff saved: %s"+Reset+"\n", path)
+	fmt.Printf(Dim+"[unblocked] handoff saved:"+Reset+" %s\n", path)
+}
+
+// HandoffSummary prints a short summary of what is being passed forward.
+func HandoffSummary(summary string) {
+	if strings.TrimSpace(summary) == "" {
+		return
+	}
+	fmt.Printf(Dim+"[unblocked] handoff summary:"+Reset+" %s\n", trimForDisplay(summary, 160))
 }
 
 // SessionInfo prints session summary.
@@ -112,4 +142,15 @@ func AllProvidersExhausted() {
 	fmt.Println(Red + Bold + "[unblocked] all providers exhausted" + Reset)
 	fmt.Println(Dim + "All configured providers have hit their limits." + Reset)
 	fmt.Println(Dim + "Session state saved in .unblocked/ — resume later." + Reset)
+}
+
+func trimForDisplay(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
 }

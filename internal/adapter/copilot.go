@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,6 +19,7 @@ type Copilot struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	process *os.Process
+	opts    Options
 }
 
 // copilotEvent represents a single JSONL event from gh copilot -p --output-format json.
@@ -41,8 +41,8 @@ type copilotEvent struct {
 	} `json:"usage,omitempty"`
 }
 
-func NewCopilot() *Copilot {
-	return &Copilot{}
+func NewCopilot(opts Options) *Copilot {
+	return &Copilot{opts: opts}
 }
 
 func (c *Copilot) Name() string {
@@ -99,13 +99,15 @@ func (c *Copilot) RunInteractive(ctx context.Context, workDir string, initialPro
 
 	events := make(chan Event, 16)
 	done := make(chan struct{})
+	capture := newPassthroughCapture()
+	inputProxy, err := startInputProxy(os.Stdin, ptmx, capture)
+	if err != nil {
+		ptmx.Close()
+		return nil, fmt.Errorf("copilot: start input proxy: %w", err)
+	}
 
-	monitor := newOutputMonitor(ptmx, os.Stdout, events)
+	monitor := newOutputMonitor(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold)
 	go monitor.Run()
-
-	go func() {
-		_, _ = io.Copy(ptmx, os.Stdin)
-	}()
 
 	go func() {
 		_ = cmd.Wait()
@@ -120,7 +122,11 @@ func (c *Copilot) RunInteractive(ctx context.Context, workDir string, initialPro
 		Resize: func(rows, cols uint16) {
 			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 		},
+		Snapshot: func() PassthroughSnapshot {
+			return capture.Snapshot(monitor.RecentOutput())
+		},
 		Close: func() error {
+			_ = inputProxy.Stop()
 			ptmx.Close()
 			if cmd.Process != nil {
 				return cmd.Process.Kill()

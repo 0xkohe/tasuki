@@ -30,7 +30,13 @@ const handoffTemplate = `# Handoff
 ## Decisions
 {{ range .Decisions }}- {{ .Title }}: {{ .Reason }}
 {{ end }}
-## Last Output Summary
+## Recent Summary
+{{ .RecentSummary }}
+
+## Recent Transcript
+{{ .RecentTranscript }}
+
+## Last Output Snapshot
 {{ .LastOutput }}
 
 ## Provider History
@@ -59,6 +65,14 @@ Read the following context carefully and continue exactly from where the previou
 ## Important Decisions
 {{ range .Decisions }}- {{ .Title }}: {{ .Reason }}
 {{ end }}
+## Recent Summary
+{{ .RecentSummary }}
+
+## Recent Transcript
+{{ .RecentTranscript }}
+
+## Last Output Snapshot
+{{ .LastOutput }}
 {{ if .DiffSummary }}## Current Git Diff Summary
 {{ .DiffSummary }}
 {{ end }}

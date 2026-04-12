@@ -40,6 +40,19 @@ type Event struct {
 	RateLimit *RateLimitInfo
 }
 
+// PassthroughSnapshot captures recent interactive session context for handoff.
+type PassthroughSnapshot struct {
+	RecentOutput     string
+	RecentTranscript string
+	Summary          string
+}
+
+// Options controls provider-specific runtime behavior.
+type Options struct {
+	SwitchThreshold    int
+	PreserveScrollback bool
+}
+
 // Request represents a prompt to send to a provider.
 type Request struct {
 	Prompt      string   // The main prompt
@@ -62,6 +75,9 @@ type InteractiveSession struct {
 
 	// Resize sends terminal size changes to the PTY.
 	Resize func(rows, cols uint16)
+
+	// Snapshot returns recent interactive context for handoff.
+	Snapshot func() PassthroughSnapshot
 
 	// Close terminates the session.
 	Close func() error

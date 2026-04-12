@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/kooooohe/unblocked/internal/adapter"
+	"github.com/kooooohe/unblocked/internal/config"
 	"github.com/kooooohe/unblocked/internal/state"
 	"github.com/kooooohe/unblocked/internal/ui"
 )
@@ -23,8 +24,12 @@ func (o *Orchestrator) switchProvider(reason string) error {
 	nextProvider := o.providers[nextIdx]
 	nextName := nextProvider.Name()
 
+	ui.FailoverStep(1, 3, fmt.Sprintf("recording %s session state", currentName))
+
 	// Update session
 	o.session.RecordSwitch(currentName, nextName, reason)
+
+	ui.FailoverStep(2, 3, "saving handoff context")
 
 	// Generate and save handoff
 	handoffMD, err := GenerateHandoffMD(o.session)
@@ -41,8 +46,10 @@ func (o *Orchestrator) switchProvider(reason string) error {
 	}
 
 	// Display switch notification
+	ui.FailoverStep(3, 3, fmt.Sprintf("queueing %s", nextName))
 	ui.SwitchNotice(currentName, nextName, reason)
 	ui.HandoffSaved(o.store.Dir() + "/handoff.md")
+	ui.HandoffSummary(o.session.RecentSummary)
 
 	o.current = nextIdx
 	return nil
@@ -74,17 +81,20 @@ func (o *Orchestrator) currentProvider() adapter.Provider {
 }
 
 // initProviders creates provider instances from the configured names.
-func initProviders(names []string) []adapter.Provider {
-	registry := map[string]func() adapter.Provider{
-		"claude":  func() adapter.Provider { return adapter.NewClaude() },
-		"codex":   func() adapter.Provider { return adapter.NewCodex() },
-		"copilot": func() adapter.Provider { return adapter.NewCopilot() },
+func initProviders(cfg *config.Config) []adapter.Provider {
+	registry := map[string]func(adapter.Options) adapter.Provider{
+		"claude":  func(opts adapter.Options) adapter.Provider { return adapter.NewClaude(opts) },
+		"codex":   func(opts adapter.Options) adapter.Provider { return adapter.NewCodex(opts) },
+		"copilot": func(opts adapter.Options) adapter.Provider { return adapter.NewCopilot(opts) },
 	}
 
 	var providers []adapter.Provider
-	for _, name := range names {
+	for _, name := range cfg.ProviderNames() {
 		if factory, ok := registry[name]; ok {
-			p := factory()
+			p := factory(adapter.Options{
+				SwitchThreshold:    cfg.ProviderThreshold(name),
+				PreserveScrollback: cfg.ProviderPreserveScrollback(name),
+			})
 			if p.IsAvailable() {
 				providers = append(providers, p)
 			} else {

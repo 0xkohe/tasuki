@@ -51,9 +51,26 @@ func SwitchNotice(from, to, reason string) {
 	fmt.Println()
 }
 
+// FailoverBanner prints a focused failover panel before steps begin.
+func FailoverBanner(from, to, trigger, detail string) {
+	line := strings.Repeat("═", 72)
+	fmt.Println()
+	fmt.Println(Cyan + line + Reset)
+	fmt.Println(Cyan + Bold + "  Switching Provider" + Reset)
+	fmt.Printf(Dim+"  from:    "+Reset+"%s\n", from)
+	fmt.Printf(Dim+"  to:      "+Reset+"%s\n", to)
+	fmt.Printf(Dim+"  trigger: "+Reset+"%s\n", trigger)
+	if detail != "" {
+		fmt.Printf(Dim+"  matched: "+Reset+"%s\n", trimForDisplay(detail, 140))
+	}
+	fmt.Println(Cyan + line + Reset)
+}
+
 // FailoverStep prints a loading-style failover step.
 func FailoverStep(step, total int, label string) {
-	fmt.Printf(Dim+"[loading] "+Reset+"[%d/%d] %s...\n", step, total, label)
+	filled := strings.Repeat("■", step)
+	empty := strings.Repeat("□", total-step)
+	fmt.Printf(Dim+"[loading] "+Reset+"[%s] %s\n", filled+empty, label)
 }
 
 // ProviderReady prints that the next provider is ready to take over.

@@ -112,6 +112,16 @@ func TestDetectRateLimitForCodexRemainingPercent(t *testing.T) {
 	}
 }
 
+func TestDetectRateLimitForCodexUsedStatus(t *testing.T) {
+	evt := detectRateLimit("gpt-5.4 high · context [▎ ] · 5h 48% · weekly 74%", "codex", 20)
+	if evt == nil {
+		t.Fatal("expected codex rate limit event")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_48%" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
 func TestDetectRateLimitForCopilotUsedPercent(t *testing.T) {
 	evt := detectRateLimit("context usage 96%", "copilot", 95)
 	if evt == nil {

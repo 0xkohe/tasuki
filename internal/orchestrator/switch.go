@@ -55,6 +55,18 @@ func (o *Orchestrator) switchProvider(reason string) error {
 	return nil
 }
 
+func (o *Orchestrator) switchProviderWithContext(reason string, trigger string, detail string) error {
+	currentName := o.providers[o.current].Name()
+	nextIdx := o.current + 1
+	if nextIdx >= len(o.providers) {
+		ui.AllProvidersExhausted()
+		return fmt.Errorf("all providers exhausted")
+	}
+
+	ui.FailoverBanner(currentName, o.providers[nextIdx].Name(), trigger, detail)
+	return o.switchProvider(reason)
+}
+
 // buildRequest creates an adapter.Request, injecting handoff context if this is a continuation.
 func (o *Orchestrator) buildRequest(prompt string) (*adapter.Request, error) {
 	req := &adapter.Request{

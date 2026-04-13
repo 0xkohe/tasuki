@@ -32,11 +32,14 @@ var usagePercentRegex = regexp.MustCompile(`you've used (\d+)% of your(?: [a-z]+
 // Example: "Claude limits 5h:96% 7d:12%"
 var structuredRateLimitRegex = regexp.MustCompile(`claude limits 5h:(\d+|na)% 7d:(\d+|na)%`)
 
-// codexRemainingRegex matches Codex status text like "47% left".
+// codexRemainingRegex matches older Codex status text like "47% left".
 var codexRemainingRegex = regexp.MustCompile(`(?:^|[\s|·])(\d+)% left(?:\b|$)`)
 
 // codexUsedRegex matches Codex warnings like "used 75% of the weekly usage already".
 var codexUsedRegex = regexp.MustCompile(`used (\d+)% of (?:the )?(?:weekly |5h |five-hour )?usage`)
+
+// codexStatusRegex matches Codex status text like "5h 48% · weekly 74%".
+var codexStatusRegex = regexp.MustCompile(`(5h|weekly)\s+(\d+)%`)
 
 // usageWarningRegex matches Claude Code warnings such as:
 // "Approaching usage limit · resets at 10am"
@@ -84,6 +87,16 @@ func newOutputMonitor(src io.Reader, dst io.Writer, events chan Event, capture *
 
 // Run starts the pass-through monitoring loop. Blocks until src is closed.
 func (m *outputMonitor) Run() {
+	processCh := make(chan string, 128)
+	var processWG sync.WaitGroup
+	processWG.Add(1)
+	go func() {
+		defer processWG.Done()
+		for chunk := range processCh {
+			m.checkForRateLimit([]byte(chunk))
+		}
+	}()
+
 	buf := make([]byte, 4096)
 	for {
 		n, err := m.src.Read(buf)
@@ -91,13 +104,15 @@ func (m *outputMonitor) Run() {
 			// Pass through to user's terminal
 			_, _ = m.dst.Write(buf[:n])
 
-			// Scan for rate limit patterns
-			m.checkForRateLimit(buf[:n])
+			// Scan for rate limit patterns off the hot path so redraw/input stays responsive.
+			processCh <- string(buf[:n])
 		}
 		if err != nil {
 			break
 		}
 	}
+	close(processCh)
+	processWG.Wait()
 }
 
 func (m *outputMonitor) checkForRateLimit(data []byte) {
@@ -198,7 +213,34 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 		}
 
 	case "codex":
-		// Codex shows remaining percentage, so switch when the displayed value
+		// Current Codex UI shows used percentages like "5h 48% · weekly 74%".
+		if matches := codexStatusRegex.FindAllStringSubmatch(lower, -1); len(matches) > 0 {
+			for _, match := range matches {
+				if len(match) < 3 {
+					continue
+				}
+				used, err := strconv.Atoi(match[2])
+				if err != nil || used < threshold {
+					continue
+				}
+				typeName := "usage_" + match[2] + "%"
+				if match[1] == "5h" {
+					typeName = "five_hour_" + match[2] + "%"
+				}
+				if match[1] == "weekly" {
+					typeName = "weekly_" + match[2] + "%"
+				}
+				return &Event{
+					Type:    EventRateLimit,
+					Content: match[0],
+					RateLimit: &RateLimitInfo{
+						Type: typeName,
+					},
+				}
+			}
+		}
+
+		// Older Codex builds show remaining percentage, so switch when the displayed value
 		// falls at or below the configured threshold.
 		if matches := codexRemainingRegex.FindStringSubmatch(lower); len(matches) > 1 {
 			remaining, err := strconv.Atoi(matches[1])

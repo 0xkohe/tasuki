@@ -187,7 +187,7 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 		// Rate limit was detected during this session.
 		ui.RateLimitWarning(providerName, rateLimitType, rateLimitDetail)
 
-		if err := o.switchProvider("rate_limited"); err != nil {
+		if err := o.switchProviderWithContext("rate_limited", rateLimitType, rateLimitDetail); err != nil {
 			return err
 		}
 
@@ -313,6 +313,8 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 		var output strings.Builder
 		needSwitch := false
 		var switchReason string
+		rateLimitType := "unknown"
+		rateLimitDetail := ""
 
 		for evt := range events {
 			switch evt.Type {
@@ -331,12 +333,16 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 				ui.RateLimitWarning(provider.Name(), limitType, evt.Content)
 				needSwitch = true
 				switchReason = "rate_limited"
+				rateLimitType = limitType
+				rateLimitDetail = evt.Content
 
 			case adapter.EventError:
 				if isLikelyRateLimit(evt.Content) {
 					ui.RateLimitWarning(provider.Name(), "detected_from_error", evt.Content)
 					needSwitch = true
 					switchReason = "rate_limited"
+					rateLimitType = "detected_from_error"
+					rateLimitDetail = evt.Content
 				} else {
 					ui.ErrorMessage(fmt.Sprintf("[%s] %s", provider.Name(), evt.Content))
 					needSwitch = true
@@ -357,6 +363,13 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 		if !needSwitch {
 			ui.Done(provider.Name())
 			return nil
+		}
+
+		if switchReason == "rate_limited" {
+			if err := o.switchProviderWithContext(switchReason, rateLimitType, rateLimitDetail); err != nil {
+				return err
+			}
+			continue
 		}
 
 		if err := o.switchProvider(switchReason); err != nil {

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Color codes
@@ -159,6 +160,33 @@ func AllProvidersExhausted() {
 	fmt.Println(Red + Bold + "[unblocked] all providers exhausted" + Reset)
 	fmt.Println(Dim + "All configured providers have hit their limits." + Reset)
 	fmt.Println(Dim + "Session state saved in .unblocked/ — resume later." + Reset)
+}
+
+// RecoveredMessage reports that a previously rate-limited higher-priority
+// provider has recovered and we are switching back to it.
+func RecoveredMessage(from, to string) {
+	fmt.Printf(Green+"[recovered] "+Reset+"%s is available again — switching from %s\n", to, from)
+}
+
+// CooldownBanner reports that a provider is still within its cooldown window.
+func CooldownBanner(provider, cycle string, until time.Time) {
+	if until.IsZero() {
+		fmt.Printf(Dim+"[cooldown] "+Reset+"%s is still cooling down (%s)\n", provider, cycle)
+		return
+	}
+	fmt.Printf(Dim+"[cooldown] "+Reset+"%s cooling down (%s) until %s\n",
+		provider, cycle, until.Local().Format("15:04 MST"))
+}
+
+// PreferredOverCooldown notes that the user explicitly requested a provider
+// that is still in cooldown.
+func PreferredOverCooldown(provider string, until time.Time) {
+	if until.IsZero() {
+		fmt.Printf(Yellow+"[warn] "+Reset+"%s is still in cooldown but was requested with -p\n", provider)
+		return
+	}
+	fmt.Printf(Yellow+"[warn] "+Reset+"%s cooldown until %s, but using per -p flag\n",
+		provider, until.Local().Format("15:04 MST"))
 }
 
 func trimForDisplay(s string, max int) string {

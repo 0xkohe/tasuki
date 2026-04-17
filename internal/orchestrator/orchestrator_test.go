@@ -11,7 +11,7 @@ func TestEnsureSessionDoesNotResumeByDefault(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default()
 
-	orch, err := New(cfg, workDir, false)
+	orch, err := New(cfg, workDir, false, "")
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -35,7 +35,7 @@ func TestEnsureSessionResumesWhenEnabled(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default()
 
-	orch, err := New(cfg, workDir, true)
+	orch, err := New(cfg, workDir, true, "")
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

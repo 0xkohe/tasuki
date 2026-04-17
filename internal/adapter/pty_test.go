@@ -24,6 +24,9 @@ func TestDetectRateLimitFromStructuredFiveHourStatusLine(t *testing.T) {
 	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_96%" {
 		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
 	}
+	if evt.RateLimit.Cycle != "5h" {
+		t.Fatalf("Cycle = %q, want 5h", evt.RateLimit.Cycle)
+	}
 }
 
 func TestDetectRateLimitFromStructuredSevenDayStatusLine(t *testing.T) {
@@ -33,6 +36,9 @@ func TestDetectRateLimitFromStructuredSevenDayStatusLine(t *testing.T) {
 	}
 	if evt.RateLimit == nil || evt.RateLimit.Type != "seven_day_97%" {
 		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+	if evt.RateLimit.Cycle != "weekly" {
+		t.Fatalf("Cycle = %q, want weekly", evt.RateLimit.Cycle)
 	}
 }
 
@@ -119,6 +125,19 @@ func TestDetectRateLimitForCodexUsedStatus(t *testing.T) {
 	}
 	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_48%" {
 		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+	if evt.RateLimit.Cycle != "5h" {
+		t.Fatalf("Cycle = %q, want 5h", evt.RateLimit.Cycle)
+	}
+}
+
+func TestDetectRateLimitForCodexWeeklyStatus(t *testing.T) {
+	evt := detectRateLimit("5h 10% · weekly 98%", "codex", 95)
+	if evt == nil {
+		t.Fatal("expected codex rate limit event")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Cycle != "weekly" {
+		t.Fatalf("Cycle = %#v, want weekly", evt.RateLimit)
 	}
 }
 

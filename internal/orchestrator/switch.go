@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/kooooohe/unblocked/internal/adapter"
 	"github.com/kooooohe/unblocked/internal/config"
@@ -10,61 +11,110 @@ import (
 )
 
 // switchProvider handles the transition from the current provider to the next one.
-// Returns the new provider index, or an error if all providers are exhausted.
+// The destination is chosen by selectStartingProvider so chain failovers respect
+// priority and cooldown state. Returns an error if every provider is exhausted.
 func (o *Orchestrator) switchProvider(reason string) error {
+	return o.switchProviderWithCooldown(reason, "", "", 0)
+}
+
+// switchProviderWithCooldown is switchProvider plus explicit cooldown metadata
+// for the outgoing provider.
+func (o *Orchestrator) switchProviderWithCooldown(reason, trigger, cycle string, resetsAt int64) error {
 	currentName := o.providers[o.current].Name()
 
-	// Record the switch in session state
-	nextIdx := o.current + 1
-	if nextIdx >= len(o.providers) {
+	if reason == "rate_limited" {
+		recordTrigger := trigger
+		if recordTrigger == "" {
+			recordTrigger = reason
+		}
+		o.recordCooldown(currentName, cycle, resetsAt, recordTrigger, reason)
+	}
+
+	res := selectStartingProvider(o.cfg, o.providers, o.providerState, time.Now(), "", currentName)
+	if res.Index < 0 || res.Index == o.current {
 		ui.AllProvidersExhausted()
 		return fmt.Errorf("all providers exhausted")
 	}
 
-	nextProvider := o.providers[nextIdx]
-	nextName := nextProvider.Name()
+	nextName := o.providers[res.Index].Name()
 
 	ui.FailoverStep(1, 3, fmt.Sprintf("recording %s session state", currentName))
-
-	// Update session
-	o.session.RecordSwitch(currentName, nextName, reason)
+	o.session.RecordSwitchWithCooldown(currentName, nextName, reason, cycle, resetsAt)
 
 	ui.FailoverStep(2, 3, "saving handoff context")
-
-	// Generate and save handoff
 	handoffMD, err := GenerateHandoffMD(o.session)
 	if err != nil {
 		return fmt.Errorf("generate handoff: %w", err)
 	}
-
 	if err := o.store.SaveHandoff(handoffMD, o.session.HandoffCount); err != nil {
 		return fmt.Errorf("save handoff: %w", err)
 	}
-
 	if err := o.store.SaveSession(o.session); err != nil {
 		return fmt.Errorf("save session: %w", err)
 	}
 
-	// Display switch notification
+	// Clear any stale cooldown on the destination (e.g. after recovery).
+	if o.providerState != nil {
+		o.providerState.ClearCooldown(nextName)
+		_ = o.store.SaveProviderState(o.providerState)
+	}
+
 	ui.FailoverStep(3, 3, fmt.Sprintf("queueing %s", nextName))
 	ui.SwitchNotice(currentName, nextName, reason)
 	ui.HandoffSaved(o.store.Dir() + "/handoff.md")
 	ui.HandoffSummary(o.session.RecentSummary)
 
-	o.current = nextIdx
+	o.current = res.Index
 	return nil
 }
 
 func (o *Orchestrator) switchProviderWithContext(reason string, trigger string, detail string) error {
+	return o.switchProviderWithContextInfo(reason, trigger, detail, nil)
+}
+
+// switchProviderWithContextInfo extends switchProviderWithContext with the
+// adapter-emitted RateLimitInfo so adapter-level ResetsAt / Cycle values
+// (when present) are preserved in the cooldown record.
+func (o *Orchestrator) switchProviderWithContextInfo(reason, trigger, detail string, info *adapter.RateLimitInfo) error {
 	currentName := o.providers[o.current].Name()
-	nextIdx := o.current + 1
-	if nextIdx >= len(o.providers) {
+
+	cycle := ""
+	resetsAt := int64(0)
+	if info != nil {
+		cycle = info.Cycle
+		resetsAt = info.ResetsAt
+	}
+	if cycle == "" {
+		cycle = cycleFromRateLimitType(trigger)
+	}
+	if resetsAt <= 0 && cycle != "" {
+		resetsAt = estimateResetsAt(cycle, time.Now())
+	}
+
+	res := selectStartingProvider(o.cfg, o.providers, o.providerState, time.Now(), "", currentName)
+	if res.Index < 0 || res.Index == o.current {
 		ui.AllProvidersExhausted()
 		return fmt.Errorf("all providers exhausted")
 	}
 
-	ui.FailoverBanner(currentName, o.providers[nextIdx].Name(), trigger, detail)
-	return o.switchProvider(reason)
+	ui.FailoverBanner(currentName, o.providers[res.Index].Name(), trigger, detail)
+	return o.switchProviderWithCooldown(reason, trigger, cycle, resetsAt)
+}
+
+// recordCooldown stores a cooldown entry for the outgoing provider and
+// persists the updated state.
+func (o *Orchestrator) recordCooldown(name, cycle string, resetsAt int64, trigger, reason string) {
+	if o.providerState == nil {
+		return
+	}
+	if cycle == "" {
+		cycle = o.cfg.ProviderResetCycle(name)
+	}
+	if resetsAt <= 0 && cycle != "" {
+		resetsAt = estimateResetsAt(cycle, time.Now())
+	}
+	o.providerState.SetCooldown(name, cycle, resetsAt, trigger, reason)
+	_ = o.store.SaveProviderState(o.providerState)
 }
 
 // buildRequest creates an adapter.Request, injecting handoff context if this is a continuation.

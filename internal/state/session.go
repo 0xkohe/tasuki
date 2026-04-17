@@ -13,6 +13,8 @@ type ProviderEntry struct {
 	Provider string `json:"provider"`
 	Status   string `json:"status"` // "active", "rate_limited", "error", "done"
 	At       string `json:"at"`
+	Cycle    string `json:"cycle,omitempty"`
+	ResetsAt int64  `json:"resets_at,omitempty"`
 }
 
 // Session represents the canonical state of an ongoing task.
@@ -57,9 +59,15 @@ func NewSession(id, goal, provider string) *Session {
 
 // RecordSwitch appends a provider switch entry.
 func (s *Session) RecordSwitch(from, toProvider, reason string) {
+	s.RecordSwitchWithCooldown(from, toProvider, reason, "", 0)
+}
+
+// RecordSwitchWithCooldown appends a provider switch entry and annotates the
+// outgoing provider's history entry with cooldown metadata.
+func (s *Session) RecordSwitchWithCooldown(from, toProvider, reason, cycle string, resetsAt int64) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	s.ProviderHistory = append(s.ProviderHistory, ProviderEntry{
-		Provider: from, Status: reason, At: now,
+		Provider: from, Status: reason, At: now, Cycle: cycle, ResetsAt: resetsAt,
 	})
 	s.ProviderHistory = append(s.ProviderHistory, ProviderEntry{
 		Provider: toProvider, Status: "active", At: now,

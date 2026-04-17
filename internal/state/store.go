@@ -99,3 +99,37 @@ func (s *Store) DeleteSession() error {
 	path := filepath.Join(s.Dir(), "session.json")
 	return os.Remove(path)
 }
+
+// LoadProviderState reads .unblocked/provider_state.json. When the file does
+// not exist, an empty state is returned (not an error).
+func (s *Store) LoadProviderState() (*ProviderState, error) {
+	path := filepath.Join(s.Dir(), "provider_state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return NewProviderState(), nil
+		}
+		return nil, fmt.Errorf("read provider state: %w", err)
+	}
+	ps := NewProviderState()
+	if err := json.Unmarshal(data, ps); err != nil {
+		return nil, fmt.Errorf("unmarshal provider state: %w", err)
+	}
+	if ps.Cooldowns == nil {
+		ps.Cooldowns = map[string]ProviderCooldown{}
+	}
+	return ps, nil
+}
+
+// SaveProviderState writes the provider state to .unblocked/provider_state.json.
+func (s *Store) SaveProviderState(ps *ProviderState) error {
+	if ps == nil {
+		return nil
+	}
+	data, err := json.MarshalIndent(ps, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal provider state: %w", err)
+	}
+	path := filepath.Join(s.Dir(), "provider_state.json")
+	return os.WriteFile(path, data, 0644)
+}

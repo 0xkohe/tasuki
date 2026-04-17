@@ -27,8 +27,9 @@ type Usage struct {
 
 // RateLimitInfo holds rate limit details when detected.
 type RateLimitInfo struct {
-	ResetsAt int64  `json:"resets_at"` // Unix timestamp
-	Type     string `json:"type"`      // e.g. "five_hour"
+	ResetsAt int64  `json:"resets_at"`       // Unix timestamp
+	Type     string `json:"type"`            // e.g. "five_hour_96%"
+	Cycle    string `json:"cycle,omitempty"` // "5h" | "weekly" | "monthly" | ""
 }
 
 // Event represents a single event from a provider's execution stream.

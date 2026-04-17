@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -281,6 +282,7 @@ func (c *Claude) parseEvent(evt *claudeStreamEvent, raw []byte) *Event {
 				RateLimit: &RateLimitInfo{
 					ResetsAt: evt.RateLimitEvent.ResetsAt,
 					Type:     evt.RateLimitEvent.RateLimitType,
+					Cycle:    claudeRateLimitCycle(evt.RateLimitEvent.RateLimitType),
 				},
 				Usage: &Usage{
 					InputTokens:  evt.InputTokens,
@@ -318,4 +320,18 @@ func (c *Claude) parseEvent(evt *claudeStreamEvent, raw []byte) *Event {
 	}
 
 	return nil
+}
+
+// claudeRateLimitCycle maps Claude's rateLimitType strings to the canonical cycle.
+func claudeRateLimitCycle(rlType string) string {
+	s := strings.ToLower(rlType)
+	switch {
+	case strings.Contains(s, "5_hour"), strings.Contains(s, "five_hour"), strings.Contains(s, "5h"):
+		return "5h"
+	case strings.Contains(s, "7_day"), strings.Contains(s, "seven_day"), strings.Contains(s, "weekly"):
+		return "weekly"
+	case strings.Contains(s, "monthly"):
+		return "monthly"
+	}
+	return ""
 }

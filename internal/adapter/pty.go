@@ -161,7 +161,8 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 					Type:    EventRateLimit,
 					Content: matches[0],
 					RateLimit: &RateLimitInfo{
-						Type: "five_hour_" + matches[1] + "%",
+						Type:  "five_hour_" + matches[1] + "%",
+						Cycle: "5h",
 					},
 				}
 			}
@@ -170,7 +171,8 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 					Type:    EventRateLimit,
 					Content: matches[0],
 					RateLimit: &RateLimitInfo{
-						Type: "seven_day_" + matches[2] + "%",
+						Type:  "seven_day_" + matches[2] + "%",
+						Cycle: "weekly",
 					},
 				}
 			}
@@ -184,7 +186,8 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 					Type:    EventRateLimit,
 					Content: matches[0],
 					RateLimit: &RateLimitInfo{
-						Type: "usage_" + matches[1] + "%",
+						Type:  "usage_" + matches[1] + "%",
+						Cycle: "5h",
 					},
 				}
 			}
@@ -196,7 +199,8 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 				Type:    EventRateLimit,
 				Content: match,
 				RateLimit: &RateLimitInfo{
-					Type: "usage_warning",
+					Type:  "usage_warning",
+					Cycle: "5h",
 				},
 			}
 		}
@@ -207,7 +211,8 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 				Type:    EventRateLimit,
 				Content: match,
 				RateLimit: &RateLimitInfo{
-					Type: "session_limit_reached",
+					Type:  "session_limit_reached",
+					Cycle: "5h",
 				},
 			}
 		}
@@ -224,17 +229,21 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 					continue
 				}
 				typeName := "usage_" + match[2] + "%"
+				cycle := ""
 				if match[1] == "5h" {
 					typeName = "five_hour_" + match[2] + "%"
+					cycle = "5h"
 				}
 				if match[1] == "weekly" {
 					typeName = "weekly_" + match[2] + "%"
+					cycle = "weekly"
 				}
 				return &Event{
 					Type:    EventRateLimit,
 					Content: match[0],
 					RateLimit: &RateLimitInfo{
-						Type: typeName,
+						Type:  typeName,
+						Cycle: cycle,
 					},
 				}
 			}
@@ -257,11 +266,18 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 		if matches := codexUsedRegex.FindStringSubmatch(lower); len(matches) > 1 {
 			used, err := strconv.Atoi(matches[1])
 			if err == nil && used >= threshold {
+				cycle := ""
+				if strings.Contains(matches[0], "weekly") {
+					cycle = "weekly"
+				} else if strings.Contains(matches[0], "5h") || strings.Contains(matches[0], "five-hour") {
+					cycle = "5h"
+				}
 				return &Event{
 					Type:    EventRateLimit,
 					Content: matches[0],
 					RateLimit: &RateLimitInfo{
-						Type: "usage_" + matches[1] + "%",
+						Type:  "usage_" + matches[1] + "%",
+						Cycle: cycle,
 					},
 				}
 			}

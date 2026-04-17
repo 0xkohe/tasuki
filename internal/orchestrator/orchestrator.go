@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
@@ -20,17 +21,21 @@ import (
 
 // Orchestrator manages provider lifecycle and failover.
 type Orchestrator struct {
-	providers []adapter.Provider
-	current   int
-	session   *state.Session
-	store     *state.Store
-	cfg       *config.Config
-	workDir   string
-	resume    bool
+	providers     []adapter.Provider
+	current       int
+	session       *state.Session
+	store         *state.Store
+	cfg           *config.Config
+	workDir       string
+	resume        bool
+	preferred     string
+	providerState *state.ProviderState
+	initialPick   selectionResult
 }
 
-// New creates and initializes an Orchestrator.
-func New(cfg *config.Config, workDir string, resume bool) (*Orchestrator, error) {
+// New creates and initializes an Orchestrator. `preferred` corresponds to the
+// -p flag — when set, that provider is selected even if it is in cooldown.
+func New(cfg *config.Config, workDir string, resume bool, preferred string) (*Orchestrator, error) {
 	store := state.NewStore(workDir)
 	if err := store.Init(); err != nil {
 		return nil, fmt.Errorf("init store: %w", err)
@@ -46,13 +51,37 @@ func New(cfg *config.Config, workDir string, resume bool) (*Orchestrator, error)
 		return nil, fmt.Errorf("no available providers found (checked: %v)", providerNames)
 	}
 
+	ps, err := store.LoadProviderState()
+	if err != nil {
+		return nil, fmt.Errorf("load provider state: %w", err)
+	}
+
+	currentName := ""
+	if resume && store.HasSession() {
+		if sess, err := store.LoadSession(); err == nil {
+			currentName = sess.CurrentProvider
+		}
+	}
+
+	pick := selectStartingProvider(cfg, providers, ps, time.Now(), preferred, currentName)
+	if pick.Index < 0 {
+		pick.Index = 0
+	}
+
+	if ps != nil && ps.Prune(time.Now()) {
+		_ = store.SaveProviderState(ps)
+	}
+
 	return &Orchestrator{
-		providers: providers,
-		current:   0,
-		store:     store,
-		cfg:       cfg,
-		workDir:   workDir,
-		resume:    resume,
+		providers:     providers,
+		current:       pick.Index,
+		store:         store,
+		cfg:           cfg,
+		workDir:       workDir,
+		resume:        resume,
+		preferred:     preferred,
+		providerState: ps,
+		initialPick:   pick,
 	}, nil
 }
 
@@ -71,6 +100,7 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 	ui.Banner()
 	ui.InfoMessage("providers: " + strings.Join(names, " -> "))
 	ui.InfoMessage("rate limit detected → automatic failover")
+	o.announceInitialPick()
 	ui.Separator()
 	fmt.Println()
 
@@ -135,6 +165,7 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 		rateLimited := false
 		rateLimitType := "unknown"
 		rateLimitDetail := ""
+		var rateLimitInfo *adapter.RateLimitInfo
 
 	waitLoop:
 		for {
@@ -147,6 +178,9 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 					rateLimited = true
 					if evt.RateLimit != nil && evt.RateLimit.Type != "" {
 						rateLimitType = evt.RateLimit.Type
+					}
+					if evt.RateLimit != nil {
+						rateLimitInfo = evt.RateLimit
 					}
 					rateLimitDetail = evt.Content
 					_ = sess.Close()
@@ -189,7 +223,7 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 		// Rate limit was detected during this session.
 		ui.RateLimitWarning(providerName, rateLimitType, rateLimitDetail)
 
-		if err := o.switchProviderWithContext("rate_limited", rateLimitType, rateLimitDetail); err != nil {
+		if err := o.switchProviderWithContextInfo("rate_limited", rateLimitType, rateLimitDetail, rateLimitInfo); err != nil {
 			return err
 		}
 
@@ -220,11 +254,13 @@ func (o *Orchestrator) RunInteractive(ctx context.Context) error {
 		names = append(names, p.Name())
 	}
 	ui.InfoMessage("providers: " + strings.Join(names, " -> "))
+	o.announceInitialPick()
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
+		o.maybeRestoreHigherPriority()
 		ui.Prompt()
 		if !scanner.Scan() {
 			break
@@ -275,6 +311,54 @@ func (o *Orchestrator) RunInteractive(ctx context.Context) error {
 	return nil
 }
 
+// maybeRestoreHigherPriority re-evaluates cooldown state and, when a previously
+// rate-limited higher-priority provider has recovered, switches back to it via
+// the standard handoff flow.
+func (o *Orchestrator) maybeRestoreHigherPriority() {
+	if o.preferred != "" {
+		// User explicitly pinned a provider — don't second-guess during REPL.
+		return
+	}
+	if o.providerState == nil {
+		return
+	}
+	currentName := o.providers[o.current].Name()
+	res := selectStartingProvider(o.cfg, o.providers, o.providerState, time.Now(), "", currentName)
+	if res.Reason != "recovered" || res.Index == o.current {
+		return
+	}
+	if err := o.switchProvider("recovered"); err != nil {
+		ui.ErrorMessage(err.Error())
+	}
+}
+
+// announceInitialPick surfaces why the starting provider was chosen so the
+// user understands any deviation from config order.
+func (o *Orchestrator) announceInitialPick() {
+	switch o.initialPick.Reason {
+	case "recovered":
+		ui.RecoveredMessage(o.initialPick.ReplacedActive, o.providers[o.initialPick.Index].Name())
+	case "preferred":
+		if !o.initialPick.CooldownUntil.IsZero() {
+			ui.PreferredOverCooldown(o.providers[o.initialPick.Index].Name(), o.initialPick.CooldownUntil)
+		}
+	case "all_cooldown":
+		ui.CooldownBanner(
+			o.providers[o.initialPick.Index].Name(),
+			o.cfg.ProviderResetCycle(o.providers[o.initialPick.Index].Name()),
+			o.initialPick.CooldownUntil,
+		)
+	}
+	if o.providerState != nil {
+		for name, cd := range o.providerState.Cooldowns {
+			if name == o.providers[o.initialPick.Index].Name() {
+				continue
+			}
+			ui.CooldownBanner(name, cd.Cycle, cd.ExpiresAt(time.Now()))
+		}
+	}
+}
+
 func (o *Orchestrator) ensureSession(goal string) {
 	if o.session != nil {
 		return
@@ -284,6 +368,24 @@ func (o *Orchestrator) ensureSession(goal string) {
 		if err == nil {
 			o.session = sess
 			ui.InfoMessage("resuming session " + sess.SessionID[:8])
+			newName := o.currentProvider().Name()
+			if sess.CurrentProvider != "" && sess.CurrentProvider != newName {
+				// Prior session was on a different provider; record a handoff
+				// so the resume prompt is regenerated for the recovered one.
+				cycle := ""
+				resetsAt := int64(0)
+				if o.providerState != nil {
+					if cd, ok := o.providerState.Cooldowns[sess.CurrentProvider]; ok {
+						cycle = cd.Cycle
+						resetsAt = cd.ResetsAt
+					}
+				}
+				sess.RecordSwitchWithCooldown(sess.CurrentProvider, newName, "recovered", cycle, resetsAt)
+				if handoffMD, herr := GenerateHandoffMD(sess); herr == nil {
+					_ = o.store.SaveHandoff(handoffMD, sess.HandoffCount)
+				}
+				_ = o.store.SaveSession(sess)
+			}
 			return
 		}
 	}
@@ -317,6 +419,7 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 		var switchReason string
 		rateLimitType := "unknown"
 		rateLimitDetail := ""
+		var rateLimitInfo *adapter.RateLimitInfo
 
 		for evt := range events {
 			switch evt.Type {
@@ -331,6 +434,7 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 				limitType := "unknown"
 				if evt.RateLimit != nil {
 					limitType = evt.RateLimit.Type
+					rateLimitInfo = evt.RateLimit
 				}
 				ui.RateLimitWarning(provider.Name(), limitType, evt.Content)
 				needSwitch = true
@@ -368,7 +472,7 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 		}
 
 		if switchReason == "rate_limited" {
-			if err := o.switchProviderWithContext(switchReason, rateLimitType, rateLimitDetail); err != nil {
+			if err := o.switchProviderWithContextInfo(switchReason, rateLimitType, rateLimitDetail, rateLimitInfo); err != nil {
 				return err
 			}
 			continue

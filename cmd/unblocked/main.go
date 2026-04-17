@@ -37,10 +37,6 @@ provider automatically.`,
 			cfg := config.Load(workDir)
 			cfg.WorkDir = workDir
 
-			if providerFlag != "" {
-				cfg = reorderProviders(cfg, providerFlag)
-			}
-
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
@@ -51,7 +47,7 @@ provider automatically.`,
 				cancel()
 			}()
 
-			orch, err := orchestrator.New(cfg, workDir, resumeFlag)
+			orch, err := orchestrator.New(cfg, workDir, resumeFlag, providerFlag)
 			if err != nil {
 				return err
 			}
@@ -113,7 +109,7 @@ provider automatically.`,
 			cfg := config.Load(workDir)
 			cfg.WorkDir = workDir
 
-			orch, err := orchestrator.New(cfg, workDir, true)
+			orch, err := orchestrator.New(cfg, workDir, true, "")
 			if err != nil {
 				return err
 			}
@@ -129,20 +125,4 @@ provider automatically.`,
 		fmt.Fprintf(os.Stderr, "%s%s%s\n", ui.Red, err, ui.Reset)
 		os.Exit(1)
 	}
-}
-
-func reorderProviders(cfg *config.Config, preferred string) *config.Config {
-	var reordered []config.ProviderConfig
-	var rest []config.ProviderConfig
-
-	for _, p := range cfg.Providers {
-		if p.Name == preferred {
-			reordered = append(reordered, p)
-		} else {
-			rest = append(rest, p)
-		}
-	}
-
-	cfg.Providers = append(reordered, rest...)
-	return cfg
 }

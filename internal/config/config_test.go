@@ -45,6 +45,61 @@ func TestProviderPreserveScrollbackUsesProviderOverride(t *testing.T) {
 	}
 }
 
+func TestProviderPriorityDerivesFromResetCycle(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true, ResetCycle: "5h"},
+			{Name: "codex", Enabled: true, ResetCycle: "weekly"},
+			{Name: "copilot", Enabled: true, ResetCycle: "monthly"},
+		},
+	}
+
+	if cfg.ProviderPriority("claude") >= cfg.ProviderPriority("codex") {
+		t.Fatalf("claude priority should be higher (smaller) than codex: %d vs %d",
+			cfg.ProviderPriority("claude"), cfg.ProviderPriority("codex"))
+	}
+	if cfg.ProviderPriority("codex") >= cfg.ProviderPriority("copilot") {
+		t.Fatalf("codex priority should be higher than copilot: %d vs %d",
+			cfg.ProviderPriority("codex"), cfg.ProviderPriority("copilot"))
+	}
+}
+
+func TestProviderPriorityExplicitWins(t *testing.T) {
+	seven := 7
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true, ResetCycle: "5h"},
+			{Name: "codex", Enabled: true, ResetCycle: "weekly", Priority: &seven},
+		},
+	}
+
+	if got := cfg.ProviderPriority("codex"); got != 7 {
+		t.Fatalf("ProviderPriority(codex) = %d, want 7 (explicit)", got)
+	}
+	// codex explicit 7 should now beat claude's derived 10.
+	if cfg.ProviderPriority("codex") >= cfg.ProviderPriority("claude") {
+		t.Fatalf("explicit codex priority should beat derived claude: %d vs %d",
+			cfg.ProviderPriority("codex"), cfg.ProviderPriority("claude"))
+	}
+}
+
+func TestProviderPriorityFallsBackToArrayPosition(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "a", Enabled: true},
+			{Name: "b", Enabled: true},
+			{Name: "c", Enabled: true},
+		},
+	}
+
+	if cfg.ProviderPriority("a") >= cfg.ProviderPriority("b") {
+		t.Fatalf("a should outrank b: %d vs %d", cfg.ProviderPriority("a"), cfg.ProviderPriority("b"))
+	}
+	if cfg.ProviderPriority("b") >= cfg.ProviderPriority("c") {
+		t.Fatalf("b should outrank c: %d vs %d", cfg.ProviderPriority("b"), cfg.ProviderPriority("c"))
+	}
+}
+
 func TestLoadMergesGlobalAndLocalConfig(t *testing.T) {
 	root := t.TempDir()
 	globalDir := t.TempDir()

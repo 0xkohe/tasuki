@@ -14,6 +14,13 @@ type ProviderConfig struct {
 	Enabled            bool   `yaml:"enabled"`
 	SwitchThreshold    int    `yaml:"switch_threshold,omitempty"`
 	PreserveScrollback *bool  `yaml:"preserve_scrollback,omitempty"`
+	// ResetCycle is the subscription reset window for this provider.
+	// Accepted values: "5h", "weekly", "monthly". Empty means unknown.
+	ResetCycle string `yaml:"reset_cycle,omitempty"`
+	// Priority controls provider selection order. Lower value = higher priority.
+	// When nil, priority is derived from ResetCycle (5h < weekly < monthly),
+	// falling back to the position in the providers array.
+	Priority *int `yaml:"priority,omitempty"`
 }
 
 // Config is the top-level relay configuration.
@@ -29,9 +36,9 @@ func Default() *Config {
 	return &Config{
 		SwitchThreshold: 95,
 		Providers: []ProviderConfig{
-			{Name: "claude", Enabled: true},
-			{Name: "codex", Enabled: true},
-			{Name: "copilot", Enabled: true},
+			{Name: "claude", Enabled: true, ResetCycle: "5h"},
+			{Name: "codex", Enabled: true, ResetCycle: "weekly"},
+			{Name: "copilot", Enabled: true, ResetCycle: "monthly"},
 		},
 	}
 }
@@ -123,6 +130,41 @@ func (c *Config) ProviderPreserveScrollback(name string) bool {
 	return c.PreserveScrollback
 }
 
+// ProviderResetCycle returns the configured reset cycle for the provider.
+// Returns "" when not configured.
+func (c *Config) ProviderResetCycle(name string) string {
+	for _, p := range c.Providers {
+		if p.Name == name {
+			return p.ResetCycle
+		}
+	}
+	return ""
+}
+
+// ProviderPriority returns the effective priority for a provider.
+// Lower values sort first. Resolution order: explicit Priority > derived from
+// ResetCycle (5h=10, weekly=50, monthly=90) > array position * 100.
+func (c *Config) ProviderPriority(name string) int {
+	for i, p := range c.Providers {
+		if p.Name != name {
+			continue
+		}
+		if p.Priority != nil {
+			return *p.Priority
+		}
+		switch p.ResetCycle {
+		case "5h":
+			return 10
+		case "weekly":
+			return 50
+		case "monthly":
+			return 90
+		}
+		return (i + 1) * 100
+	}
+	return 1 << 30
+}
+
 func (c *Config) merge(overlay *Config) {
 	if overlay == nil {
 		return
@@ -142,6 +184,11 @@ func (c *Config) normalize() {
 	for i := range c.Providers {
 		if c.Providers[i].SwitchThreshold < 0 || c.Providers[i].SwitchThreshold > 100 {
 			c.Providers[i].SwitchThreshold = 0
+		}
+		switch c.Providers[i].ResetCycle {
+		case "", "5h", "weekly", "monthly":
+		default:
+			c.Providers[i].ResetCycle = ""
 		}
 	}
 }

@@ -26,10 +26,11 @@ type Orchestrator struct {
 	store     *state.Store
 	cfg       *config.Config
 	workDir   string
+	resume    bool
 }
 
 // New creates and initializes an Orchestrator.
-func New(cfg *config.Config, workDir string) (*Orchestrator, error) {
+func New(cfg *config.Config, workDir string, resume bool) (*Orchestrator, error) {
 	store := state.NewStore(workDir)
 	if err := store.Init(); err != nil {
 		return nil, fmt.Errorf("init store: %w", err)
@@ -51,6 +52,7 @@ func New(cfg *config.Config, workDir string) (*Orchestrator, error) {
 		store:     store,
 		cfg:       cfg,
 		workDir:   workDir,
+		resume:    resume,
 	}, nil
 }
 
@@ -277,7 +279,7 @@ func (o *Orchestrator) ensureSession(goal string) {
 	if o.session != nil {
 		return
 	}
-	if o.store.HasSession() {
+	if o.resume && o.store.HasSession() {
 		sess, err := o.store.LoadSession()
 		if err == nil {
 			o.session = sess

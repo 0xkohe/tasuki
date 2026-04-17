@@ -18,6 +18,7 @@ func main() {
 	var providerFlag string
 	var pipeMode bool
 	var initGlobal bool
+	var resumeFlag bool
 
 	rootCmd := &cobra.Command{
 		Use:   "unblocked [prompt]",
@@ -50,7 +51,7 @@ provider automatically.`,
 				cancel()
 			}()
 
-			orch, err := orchestrator.New(cfg, workDir)
+			orch, err := orchestrator.New(cfg, workDir, resumeFlag)
 			if err != nil {
 				return err
 			}
@@ -73,6 +74,7 @@ provider automatically.`,
 
 	rootCmd.Flags().StringVarP(&providerFlag, "provider", "p", "", "preferred provider (claude, codex, copilot)")
 	rootCmd.Flags().BoolVar(&pipeMode, "pipe", false, "non-interactive mode (formats output)")
+	rootCmd.Flags().BoolVar(&resumeFlag, "resume", false, "resume the previous unblocked session in this project")
 
 	initCmd := &cobra.Command{
 		Use:   "init",
@@ -111,7 +113,7 @@ provider automatically.`,
 			cfg := config.Load(workDir)
 			cfg.WorkDir = workDir
 
-			orch, err := orchestrator.New(cfg, workDir)
+			orch, err := orchestrator.New(cfg, workDir, true)
 			if err != nil {
 				return err
 			}

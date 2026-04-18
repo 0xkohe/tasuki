@@ -23,6 +23,48 @@ func TestProviderThresholdUsesProviderOverride(t *testing.T) {
 	}
 }
 
+func TestProviderWarnThresholdDerivedWhenUnset(t *testing.T) {
+	cfg := &Config{
+		SwitchThreshold: 95,
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true},
+		},
+	}
+	if got := cfg.ProviderWarnThreshold("claude"); got != 80 {
+		t.Fatalf("ProviderWarnThreshold(claude) = %d, want 80 (95-15)", got)
+	}
+}
+
+func TestProviderWarnThresholdProviderOverride(t *testing.T) {
+	cfg := &Config{
+		SwitchThreshold: 95,
+		WarnThreshold:   70,
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true, WarnThreshold: 60},
+			{Name: "codex", Enabled: true},
+		},
+	}
+	if got := cfg.ProviderWarnThreshold("claude"); got != 60 {
+		t.Fatalf("ProviderWarnThreshold(claude) = %d, want 60", got)
+	}
+	if got := cfg.ProviderWarnThreshold("codex"); got != 70 {
+		t.Fatalf("ProviderWarnThreshold(codex) = %d, want 70 (top-level)", got)
+	}
+}
+
+func TestProviderWarnThresholdClampedBelowSwitch(t *testing.T) {
+	cfg := &Config{
+		SwitchThreshold: 95,
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true, WarnThreshold: 95},
+		},
+	}
+	// warn must not equal or exceed switch — clamped to switch-1.
+	if got := cfg.ProviderWarnThreshold("claude"); got != 94 {
+		t.Fatalf("ProviderWarnThreshold(claude) = %d, want 94", got)
+	}
+}
+
 func TestProviderPreserveScrollbackUsesProviderOverride(t *testing.T) {
 	trueValue := true
 	falseValue := false

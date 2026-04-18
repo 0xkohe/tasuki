@@ -59,29 +59,39 @@ const defaultSwitchThreshold = 95
 
 // outputMonitor reads from src, writes to dst (pass-through), and scans for rate limit patterns.
 type outputMonitor struct {
-	src       io.Reader
-	dst       io.Writer
-	events    chan Event
-	capture   *passthroughCapture
-	provider  string
-	threshold int
-	mu        sync.Mutex
-	buf       strings.Builder // rolling window for pattern matching
-	history   strings.Builder // recent plain-text output for handoff
-	triggered bool            // only fire once
+	src           io.Reader
+	dst           io.Writer
+	events        chan Event
+	capture       *passthroughCapture
+	provider      string
+	threshold     int
+	warnThreshold int
+	mu            sync.Mutex
+	buf           strings.Builder // rolling window for pattern matching
+	history       strings.Builder // recent plain-text output for handoff
+	triggered     bool            // switch threshold — fire once
+	warned        bool            // warn threshold — fire once
 }
 
 func newOutputMonitor(src io.Reader, dst io.Writer, events chan Event, capture *passthroughCapture, provider string, threshold int) *outputMonitor {
+	return newOutputMonitorWithWarn(src, dst, events, capture, provider, threshold, 0)
+}
+
+func newOutputMonitorWithWarn(src io.Reader, dst io.Writer, events chan Event, capture *passthroughCapture, provider string, threshold, warn int) *outputMonitor {
 	if threshold <= 0 || threshold > 100 {
 		threshold = defaultSwitchThreshold
 	}
+	if warn < 0 || warn >= threshold {
+		warn = 0
+	}
 	return &outputMonitor{
-		src:       src,
-		dst:       dst,
-		events:    events,
-		capture:   capture,
-		provider:  provider,
-		threshold: threshold,
+		src:           src,
+		dst:           dst,
+		events:        events,
+		capture:       capture,
+		provider:      provider,
+		threshold:     threshold,
+		warnThreshold: warn,
 	}
 }
 
@@ -144,6 +154,18 @@ func (m *outputMonitor) checkForRateLimit(data []byte) {
 	if evt := detectRateLimit(lower, m.provider, m.threshold); evt != nil {
 		m.triggered = true
 		m.events <- *evt
+		return
+	}
+
+	if !m.warned && m.warnThreshold > 0 {
+		if evt := detectRateLimitWarning(lower, m.provider, m.warnThreshold, m.threshold); evt != nil {
+			m.warned = true
+			// Reset the scan buffer so the first-match regex in detectRateLimit
+			// isn't anchored to the stale warn-level percentage when the switch
+			// threshold is eventually crossed.
+			m.buf.Reset()
+			m.events <- *evt
+		}
 	}
 }
 
@@ -155,7 +177,9 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 	switch provider {
 	case "claude":
 		// Check unblocked's structured Claude status line derived from rate_limits.
-		if matches := structuredRateLimitRegex.FindStringSubmatch(lower); len(matches) > 2 {
+		// Use the most-recent match — status lines are re-rendered in place and
+		// accumulate in the rolling scan buffer, so the latest value wins.
+		if matches := lastSubmatch(structuredRateLimitRegex, lower); len(matches) > 2 {
 			if pct, ok := parseUsagePercent(matches[1]); ok && pct >= threshold {
 				return &Event{
 					Type:    EventRateLimit,
@@ -179,7 +203,7 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 		}
 
 		// Check usage percentage from Claude Code's built-in usage message.
-		if matches := usagePercentRegex.FindStringSubmatch(lower); len(matches) > 1 {
+		if matches := lastSubmatch(usagePercentRegex, lower); len(matches) > 1 {
 			pct, err := strconv.Atoi(matches[1])
 			if err == nil && pct >= threshold {
 				return &Event{
@@ -218,13 +242,16 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 		}
 
 	case "codex":
-		// Current Codex UI shows used percentages like "5h 48% · weekly 74%".
+		// Current Codex UI status line shows remaining budget like
+		// "5h 81% · weekly 89%". Convert that to used% so the configured
+		// threshold keeps the same meaning as other providers.
 		if matches := codexStatusRegex.FindAllStringSubmatch(lower, -1); len(matches) > 0 {
 			for _, match := range matches {
 				if len(match) < 3 {
 					continue
 				}
-				used, err := strconv.Atoi(match[2])
+				remaining, err := strconv.Atoi(match[2])
+				used := 100 - remaining
 				if err != nil || used < threshold {
 					continue
 				}
@@ -249,11 +276,13 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 			}
 		}
 
-		// Older Codex builds show remaining percentage, so switch when the displayed value
-		// falls at or below the configured threshold.
+		// Older Codex builds show remaining percentage. Convert that to used%
+		// so the configured threshold keeps the same meaning as other providers:
+		// threshold=80 means "switch after 80% used", i.e. at 20% left.
 		if matches := codexRemainingRegex.FindStringSubmatch(lower); len(matches) > 1 {
 			remaining, err := strconv.Atoi(matches[1])
-			if err == nil && remaining <= threshold {
+			used := 100 - remaining
+			if err == nil && used >= threshold {
 				return &Event{
 					Type:    EventRateLimit,
 					Content: matches[0],
@@ -331,6 +360,147 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 	return nil
 }
 
+// detectRateLimitWarning mirrors the percent-based branches of detectRateLimit
+// but fires when usage sits between warn and switch thresholds. Hard-limit
+// phrases (e.g. "rate limit reached") are ignored here — those belong to the
+// switch stage since there is no "warning" when the limit is already hit.
+func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
+	if warn <= 0 || warn >= switchT {
+		return nil
+	}
+
+	inRange := func(pct int) bool { return pct >= warn && pct < switchT }
+
+	switch provider {
+	case "claude":
+		if matches := lastSubmatch(structuredRateLimitRegex, lower); len(matches) > 2 {
+			if pct, ok := parseUsagePercent(matches[1]); ok && inRange(pct) {
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: matches[0],
+					RateLimit: &RateLimitInfo{
+						Type:  "five_hour_" + matches[1] + "%",
+						Cycle: "5h",
+					},
+				}
+			}
+			if pct, ok := parseUsagePercent(matches[2]); ok && inRange(pct) {
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: matches[0],
+					RateLimit: &RateLimitInfo{
+						Type:  "seven_day_" + matches[2] + "%",
+						Cycle: "weekly",
+					},
+				}
+			}
+		}
+		if matches := lastSubmatch(usagePercentRegex, lower); len(matches) > 1 {
+			if pct, err := strconv.Atoi(matches[1]); err == nil && inRange(pct) {
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: matches[0],
+					RateLimit: &RateLimitInfo{
+						Type:  "usage_" + matches[1] + "%",
+						Cycle: "5h",
+					},
+				}
+			}
+		}
+
+	case "codex":
+		if matches := codexStatusRegex.FindAllStringSubmatch(lower, -1); len(matches) > 0 {
+			for _, match := range matches {
+				if len(match) < 3 {
+					continue
+				}
+				remaining, err := strconv.Atoi(match[2])
+				used := 100 - remaining
+				if err != nil || !inRange(used) {
+					continue
+				}
+				typeName := "usage_" + match[2] + "%"
+				cycle := ""
+				if match[1] == "5h" {
+					typeName = "five_hour_" + match[2] + "%"
+					cycle = "5h"
+				}
+				if match[1] == "weekly" {
+					typeName = "weekly_" + match[2] + "%"
+					cycle = "weekly"
+				}
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: match[0],
+					RateLimit: &RateLimitInfo{
+						Type:  typeName,
+						Cycle: cycle,
+					},
+				}
+			}
+		}
+		if matches := codexUsedRegex.FindStringSubmatch(lower); len(matches) > 1 {
+			if used, err := strconv.Atoi(matches[1]); err == nil && inRange(used) {
+				cycle := ""
+				if strings.Contains(matches[0], "weekly") {
+					cycle = "weekly"
+				} else if strings.Contains(matches[0], "5h") || strings.Contains(matches[0], "five-hour") {
+					cycle = "5h"
+				}
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: matches[0],
+					RateLimit: &RateLimitInfo{
+						Type:  "usage_" + matches[1] + "%",
+						Cycle: cycle,
+					},
+				}
+			}
+		}
+		if matches := codexRemainingRegex.FindStringSubmatch(lower); len(matches) > 1 {
+			if remaining, err := strconv.Atoi(matches[1]); err == nil && inRange(100-remaining) {
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: matches[0],
+					RateLimit: &RateLimitInfo{
+						Type: "remaining_" + matches[1] + "%",
+					},
+				}
+			}
+		}
+
+	case "copilot":
+		if matches := copilotUsedRegex.FindStringSubmatch(lower); len(matches) > 2 {
+			value := matches[1]
+			if value == "" {
+				value = matches[2]
+			}
+			if used, err := strconv.Atoi(value); err == nil && inRange(used) {
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: matches[0],
+					RateLimit: &RateLimitInfo{
+						Type: "usage_" + value + "%",
+					},
+				}
+			}
+		}
+		if matches := copilotCompactionRegex.FindStringSubmatch(lower); len(matches) > 1 {
+			if used, err := strconv.Atoi(matches[1]); err == nil && inRange(used) {
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: matches[0],
+					RateLimit: &RateLimitInfo{
+						Type: "usage_" + matches[1] + "%",
+					},
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func (m *outputMonitor) RecentOutput() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -371,6 +541,17 @@ func summarizeRecentOutput(text string, maxChars int, maxLines int) string {
 		return summary
 	}
 	return summary[len(summary)-maxChars:]
+}
+
+// lastSubmatch returns the last submatch of re against s, or nil if no match.
+// Status lines are redrawn in place and the rolling scan buffer accumulates
+// successive snapshots, so "latest wins" is the correct semantic.
+func lastSubmatch(re *regexp.Regexp, s string) []string {
+	all := re.FindAllStringSubmatch(s, -1)
+	if len(all) == 0 {
+		return nil
+	}
+	return all[len(all)-1]
 }
 
 func parseUsagePercent(s string) (int, bool) {

@@ -109,7 +109,7 @@ func TestDetectRateLimitRespectsThreshold(t *testing.T) {
 }
 
 func TestDetectRateLimitForCodexRemainingPercent(t *testing.T) {
-	evt := detectRateLimit("20% left", "codex", 20)
+	evt := detectRateLimit("20% left", "codex", 80)
 	if evt == nil {
 		t.Fatal("expected codex rate limit event")
 	}
@@ -118,12 +118,19 @@ func TestDetectRateLimitForCodexRemainingPercent(t *testing.T) {
 	}
 }
 
-func TestDetectRateLimitForCodexUsedStatus(t *testing.T) {
-	evt := detectRateLimit("gpt-5.4 high · context [▎ ] · 5h 48% · weekly 74%", "codex", 20)
+func TestDetectRateLimitForCodexRemainingPercentBelowUsedThreshold(t *testing.T) {
+	evt := detectRateLimit("20% left", "codex", 81)
+	if evt != nil {
+		t.Fatalf("expected no codex rate limit event, got %#v", evt)
+	}
+}
+
+func TestDetectRateLimitForCodexStatusUsesRemainingSemantics(t *testing.T) {
+	evt := detectRateLimit("gpt-5.4 high · context 100% left · 5h 20% · weekly 74%", "codex", 80)
 	if evt == nil {
 		t.Fatal("expected codex rate limit event")
 	}
-	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_48%" {
+	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_20%" {
 		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
 	}
 	if evt.RateLimit.Cycle != "5h" {
@@ -131,13 +138,30 @@ func TestDetectRateLimitForCodexUsedStatus(t *testing.T) {
 	}
 }
 
-func TestDetectRateLimitForCodexWeeklyStatus(t *testing.T) {
-	evt := detectRateLimit("5h 10% · weekly 98%", "codex", 95)
+func TestDetectRateLimitForCodexStatusDoesNotFireWhenRemainingAboveThreshold(t *testing.T) {
+	evt := detectRateLimit("gpt-5.4 high · context 100% left · 5h 81% · weekly 89%", "codex", 70)
+	if evt != nil {
+		t.Fatalf("expected no codex rate limit event, got %#v", evt)
+	}
+}
+
+func TestDetectRateLimitForCodexWeeklyStatusUsesRemainingSemantics(t *testing.T) {
+	evt := detectRateLimit("5h 90% · weekly 5%", "codex", 95)
 	if evt == nil {
 		t.Fatal("expected codex rate limit event")
 	}
 	if evt.RateLimit == nil || evt.RateLimit.Cycle != "weekly" {
 		t.Fatalf("Cycle = %#v, want weekly", evt.RateLimit)
+	}
+}
+
+func TestDetectRateLimitForCodexExplicitUsedStatus(t *testing.T) {
+	evt := detectRateLimit("used 82% of the weekly usage already", "codex", 80)
+	if evt == nil {
+		t.Fatal("expected codex rate limit event")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Cycle != "weekly" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
 	}
 }
 
@@ -148,5 +172,124 @@ func TestDetectRateLimitForCopilotUsedPercent(t *testing.T) {
 	}
 	if evt.RateLimit == nil || evt.RateLimit.Type != "usage_96%" {
 		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+func TestDetectRateLimitWarningBetweenThresholds(t *testing.T) {
+	evt := detectRateLimitWarning("claude limits 5h:85% 7d:10%", "claude", 80, 95)
+	if evt == nil {
+		t.Fatal("expected warning event")
+	}
+	if evt.Type != EventRateLimitWarning {
+		t.Fatalf("unexpected event type: %v", evt.Type)
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_85%" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+func TestDetectRateLimitWarningSkippedWhenAtSwitch(t *testing.T) {
+	// 96% is at/above the switch threshold — warning must not fire (the
+	// hard-limit detector handles it).
+	evt := detectRateLimitWarning("claude limits 5h:96% 7d:10%", "claude", 80, 95)
+	if evt != nil {
+		t.Fatalf("expected no warning at switch threshold, got %#v", evt)
+	}
+}
+
+func TestDetectRateLimitWarningSkippedBelowWarn(t *testing.T) {
+	evt := detectRateLimitWarning("claude limits 5h:50% 7d:10%", "claude", 80, 95)
+	if evt != nil {
+		t.Fatalf("expected no warning below warn threshold, got %#v", evt)
+	}
+}
+
+func TestDetectRateLimitWarningCodexStatusUsesRemainingSemantics(t *testing.T) {
+	evt := detectRateLimitWarning("5h 20% · weekly 90%", "codex", 80, 95)
+	if evt == nil {
+		t.Fatal("expected codex warning event")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Cycle != "5h" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+func TestDetectRateLimitWarningCodexStatusDoesNotFireWhenRemainingHigh(t *testing.T) {
+	evt := detectRateLimitWarning("5h 81% · weekly 89%", "codex", 80, 95)
+	if evt != nil {
+		t.Fatalf("expected no codex warning event, got %#v", evt)
+	}
+}
+
+func TestDetectRateLimitWarningCodexRemainingUsesUsedSemantics(t *testing.T) {
+	evt := detectRateLimitWarning("20% left", "codex", 80, 95)
+	if evt == nil {
+		t.Fatal("expected codex warning event")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Type != "remaining_20%" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+func TestDetectRateLimitWarningCodexExplicitUsedStatus(t *testing.T) {
+	evt := detectRateLimitWarning("used 82% of the weekly usage already", "codex", 80, 95)
+	if evt == nil {
+		t.Fatal("expected codex warning event")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Cycle != "weekly" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+func TestOutputMonitorFiresWarningBeforeSwitch(t *testing.T) {
+	events := make(chan Event, 4)
+	monitor := newOutputMonitorWithWarn(strings.NewReader(""), io.Discard, events, nil, "claude", 95, 80)
+	monitor.checkForRateLimit([]byte("claude limits 5h:85% 7d:10%"))
+	select {
+	case evt := <-events:
+		if evt.Type != EventRateLimitWarning {
+			t.Fatalf("expected warning, got %v", evt.Type)
+		}
+	default:
+		t.Fatal("expected warning event to be emitted")
+	}
+
+	// Warning should fire only once.
+	monitor.checkForRateLimit([]byte("claude limits 5h:86% 7d:10%"))
+	select {
+	case evt := <-events:
+		t.Fatalf("expected no further warning event, got %v", evt.Type)
+	default:
+	}
+
+	// Crossing the switch threshold still fires the RateLimit event.
+	monitor.checkForRateLimit([]byte("claude limits 5h:97% 7d:10%"))
+	select {
+	case evt := <-events:
+		if evt.Type != EventRateLimit {
+			t.Fatalf("expected rate limit, got %v", evt.Type)
+		}
+	default:
+		t.Fatal("expected rate limit event after crossing switch threshold")
+	}
+}
+
+func TestOutputMonitorSwitchFiresWithoutWarnStage(t *testing.T) {
+	events := make(chan Event, 2)
+	monitor := newOutputMonitorWithWarn(strings.NewReader(""), io.Discard, events, nil, "claude", 95, 80)
+	// Going straight over the switch threshold must not also emit a warning.
+	monitor.checkForRateLimit([]byte("claude limits 5h:97% 7d:10%"))
+	var types []EventType
+	for {
+		select {
+		case evt := <-events:
+			types = append(types, evt.Type)
+			continue
+		default:
+		}
+		break
+	}
+	if len(types) != 1 || types[0] != EventRateLimit {
+		t.Fatalf("expected single rate-limit event, got %v", types)
 	}
 }

@@ -112,7 +112,7 @@ func (c *Codex) RunInteractive(ctx context.Context, workDir string, initialPromp
 		return nil, fmt.Errorf("codex: start input proxy: %w", err)
 	}
 
-	monitor := newOutputMonitor(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold)
+	monitor := newOutputMonitorWithWarn(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold, c.opts.WarnThreshold)
 	go monitor.Run()
 
 	go func() {

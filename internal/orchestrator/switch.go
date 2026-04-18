@@ -91,7 +91,7 @@ func (o *Orchestrator) switchProviderWithContextInfo(reason, trigger, detail str
 		resetsAt = estimateResetsAt(cycle, time.Now())
 	}
 
-	res := selectStartingProvider(o.cfg, o.providers, o.providerState, time.Now(), "", currentName)
+	res := o.previewSelectionAfterCooldown(currentName, cycle, resetsAt, trigger, reason)
 	if res.Index < 0 || res.Index == o.current {
 		ui.AllProvidersExhausted()
 		return fmt.Errorf("all providers exhausted")
@@ -99,6 +99,78 @@ func (o *Orchestrator) switchProviderWithContextInfo(reason, trigger, detail str
 
 	ui.FailoverBanner(currentName, o.providers[res.Index].Name(), trigger, detail)
 	return o.switchProviderWithCooldown(reason, trigger, cycle, resetsAt)
+}
+
+// previewSelectionAfterCooldown computes the next provider as if the current
+// one had already been placed into cooldown. This keeps the failover banner and
+// exhaustion checks aligned with the actual switch that follows.
+func (o *Orchestrator) previewSelectionAfterCooldown(
+	currentName, cycle string,
+	resetsAt int64,
+	trigger, reason string,
+) selectionResult {
+	previewState := cloneProviderState(o.providerState)
+	if previewState == nil {
+		previewState = state.NewProviderState()
+	}
+	previewState.SetCooldown(currentName, cycle, resetsAt, trigger, reason)
+	return selectStartingProvider(o.cfg, o.providers, previewState, time.Now(), "", currentName)
+}
+
+func cloneProviderState(src *state.ProviderState) *state.ProviderState {
+	if src == nil {
+		return nil
+	}
+	dst := state.NewProviderState()
+	dst.UpdatedAt = src.UpdatedAt
+	for name, cooldown := range src.Cooldowns {
+		dst.Cooldowns[name] = cooldown
+	}
+	return dst
+}
+
+// prepareFailover is invoked when the current provider crosses the warning
+// threshold but not the switch threshold yet. It eagerly picks the next
+// candidate (as if the current were already cooling down), re-validates its
+// availability (catches auth drift), and surfaces a heads-up so the eventual
+// switch is near-instant. No session mutation happens here.
+func (o *Orchestrator) prepareFailover(trigger, cycle, detail string, info *adapter.RateLimitInfo) {
+	currentName := o.providers[o.current].Name()
+
+	resolvedCycle := cycle
+	if resolvedCycle == "" && info != nil {
+		resolvedCycle = info.Cycle
+	}
+	if resolvedCycle == "" {
+		resolvedCycle = cycleFromRateLimitType(trigger)
+	}
+	resetsAt := int64(0)
+	if info != nil {
+		resetsAt = info.ResetsAt
+	}
+	if resetsAt <= 0 && resolvedCycle != "" {
+		resetsAt = estimateResetsAt(resolvedCycle, time.Now())
+	}
+
+	res := o.previewSelectionAfterCooldown(currentName, resolvedCycle, resetsAt, trigger, "warn")
+	if res.Index < 0 || res.Index == o.current {
+		ui.PreFailoverWarning(currentName, "", trigger, "", detail)
+		return
+	}
+
+	next := o.providers[res.Index]
+	nextName := next.Name()
+	status := "ready"
+	if !next.IsAvailable() {
+		status = "auth missing"
+	} else if res.Reason == "all_cooldown" {
+		status = "cooldown"
+	} else if o.providerState != nil {
+		if cd, ok := o.providerState.Cooldowns[nextName]; ok && !cd.IsAvailable(time.Now()) {
+			status = "cooldown"
+		}
+	}
+	ui.PreFailoverWarning(currentName, nextName, trigger, status, detail)
 }
 
 // recordCooldown stores a cooldown entry for the outgoing provider and
@@ -155,6 +227,7 @@ func initProviders(cfg *config.Config) []adapter.Provider {
 		if factory, ok := registry[name]; ok {
 			p := factory(adapter.Options{
 				SwitchThreshold:    cfg.ProviderThreshold(name),
+				WarnThreshold:      cfg.ProviderWarnThreshold(name),
 				PreserveScrollback: cfg.ProviderPreserveScrollback(name),
 			})
 			if p.IsAvailable() {

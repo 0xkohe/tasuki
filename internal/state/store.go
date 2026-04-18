@@ -100,6 +100,16 @@ func (s *Store) DeleteSession() error {
 	return os.Remove(path)
 }
 
+// DeleteProviderState removes the persisted provider cooldown state.
+func (s *Store) DeleteProviderState() error {
+	path := filepath.Join(s.Dir(), "provider_state.json")
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 // LoadProviderState reads .unblocked/provider_state.json. When the file does
 // not exist, an empty state is returned (not an error).
 func (s *Store) LoadProviderState() (*ProviderState, error) {

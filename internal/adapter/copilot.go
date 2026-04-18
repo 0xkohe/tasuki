@@ -106,7 +106,7 @@ func (c *Copilot) RunInteractive(ctx context.Context, workDir string, initialPro
 		return nil, fmt.Errorf("copilot: start input proxy: %w", err)
 	}
 
-	monitor := newOutputMonitor(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold)
+	monitor := newOutputMonitorWithWarn(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold, c.opts.WarnThreshold)
 	go monitor.Run()
 
 	go func() {

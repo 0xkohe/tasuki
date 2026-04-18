@@ -101,6 +101,31 @@ func InfoMessage(msg string) {
 	fmt.Printf(Dim+"[info] "+Reset+"%s\n", msg)
 }
 
+// PreFailoverWarning prints a heads-up that the current provider is
+// approaching its switch threshold and the next candidate has been verified.
+// nextStatus is a short label like "ready", "auth missing", or "cooldown".
+func PreFailoverWarning(current, next, trigger, nextStatus, detail string) {
+	fmt.Println()
+	fmt.Println(Yellow + Bold + "[unblocked] Approaching Limit" + Reset)
+	fmt.Printf(Dim+"provider: "+Reset+"%s\n", current)
+	fmt.Printf(Dim+"trigger:  "+Reset+"%s\n", trigger)
+	if detail != "" {
+		fmt.Printf(Dim+"matched:  "+Reset+"%s\n", trimForDisplay(detail, 120))
+	}
+	if next != "" {
+		statusColor := Green
+		lower := strings.ToLower(nextStatus)
+		if strings.Contains(lower, "missing") || strings.Contains(lower, "cooldown") || strings.Contains(lower, "unavailable") {
+			statusColor = Yellow
+		}
+		fmt.Printf(Dim+"next:     "+Reset+"%s "+Dim+"("+Reset+statusColor+"%s"+Reset+Dim+")"+Reset+"\n", next, nextStatus)
+	} else {
+		fmt.Printf(Dim + "next:     " + Reset + Yellow + "no candidate available" + Reset + "\n")
+	}
+	fmt.Printf(Dim + "action:   " + Reset + "continuing on current provider, prepared to switch on hard limit\n")
+	fmt.Println()
+}
+
 // RateLimitWarning prints a rate limit warning.
 func RateLimitWarning(provider, limitType, detail string) {
 	fmt.Println()

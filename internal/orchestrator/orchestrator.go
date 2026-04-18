@@ -29,13 +29,14 @@ type Orchestrator struct {
 	workDir       string
 	resume        bool
 	preferred     string
+	ignoreCooldown bool
 	providerState *state.ProviderState
 	initialPick   selectionResult
 }
 
 // New creates and initializes an Orchestrator. `preferred` corresponds to the
 // -p flag — when set, that provider is selected even if it is in cooldown.
-func New(cfg *config.Config, workDir string, resume bool, preferred string) (*Orchestrator, error) {
+func New(cfg *config.Config, workDir string, resume bool, preferred string, ignoreCooldown bool) (*Orchestrator, error) {
 	store := state.NewStore(workDir)
 	if err := store.Init(); err != nil {
 		return nil, fmt.Errorf("init store: %w", err)
@@ -51,24 +52,24 @@ func New(cfg *config.Config, workDir string, resume bool, preferred string) (*Or
 		return nil, fmt.Errorf("no available providers found (checked: %v)", providerNames)
 	}
 
-	ps, err := store.LoadProviderState()
-	if err != nil {
-		return nil, fmt.Errorf("load provider state: %w", err)
-	}
-
-	currentName := ""
-	if resume && store.HasSession() {
-		if sess, err := store.LoadSession(); err == nil {
-			currentName = sess.CurrentProvider
+	var ps *state.ProviderState
+	var err error
+	if ignoreCooldown {
+		ps = state.NewProviderState()
+		_ = store.DeleteProviderState()
+	} else {
+		ps, err = store.LoadProviderState()
+		if err != nil {
+			return nil, fmt.Errorf("load provider state: %w", err)
 		}
 	}
 
-	pick := selectStartingProvider(cfg, providers, ps, time.Now(), preferred, currentName)
+	pick := selectStartingProvider(cfg, providers, ps, time.Now(), preferred, "")
 	if pick.Index < 0 {
 		pick.Index = 0
 	}
 
-	if ps != nil && ps.Prune(time.Now()) {
+	if !ignoreCooldown && ps != nil && ps.Prune(time.Now()) {
 		_ = store.SaveProviderState(ps)
 	}
 
@@ -80,6 +81,7 @@ func New(cfg *config.Config, workDir string, resume bool, preferred string) (*Or
 		workDir:       workDir,
 		resume:        resume,
 		preferred:     preferred,
+		ignoreCooldown: ignoreCooldown,
 		providerState: ps,
 		initialPick:   pick,
 	}, nil
@@ -173,6 +175,18 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 			case evt, ok := <-sess.Events:
 				if !ok {
 					break waitLoop
+				}
+				if evt.Type == adapter.EventRateLimitWarning {
+					warnType := "unknown"
+					cycle := ""
+					if evt.RateLimit != nil {
+						if evt.RateLimit.Type != "" {
+							warnType = evt.RateLimit.Type
+						}
+						cycle = evt.RateLimit.Cycle
+					}
+					o.prepareFailover(warnType, cycle, evt.Content, evt.RateLimit)
+					continue
 				}
 				if evt.Type == adapter.EventRateLimit {
 					rateLimited = true
@@ -429,6 +443,17 @@ func (o *Orchestrator) executeWithFailover(ctx context.Context, prompt string) e
 
 			case adapter.EventTurnComplete:
 				// noop
+
+			case adapter.EventRateLimitWarning:
+				warnType := "unknown"
+				cycle := ""
+				if evt.RateLimit != nil {
+					if evt.RateLimit.Type != "" {
+						warnType = evt.RateLimit.Type
+					}
+					cycle = evt.RateLimit.Cycle
+				}
+				o.prepareFailover(warnType, cycle, evt.Content, evt.RateLimit)
 
 			case adapter.EventRateLimit:
 				limitType := "unknown"

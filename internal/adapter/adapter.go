@@ -14,6 +14,7 @@ const (
 	EventMessageDelta EventType = iota
 	EventTurnComplete
 	EventRateLimit
+	EventRateLimitWarning
 	EventError
 	EventDone
 )
@@ -51,6 +52,7 @@ type PassthroughSnapshot struct {
 // Options controls provider-specific runtime behavior.
 type Options struct {
 	SwitchThreshold    int
+	WarnThreshold      int
 	PreserveScrollback bool
 }
 

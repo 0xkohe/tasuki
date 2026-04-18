@@ -13,6 +13,7 @@ type ProviderConfig struct {
 	Name               string `yaml:"name"`
 	Enabled            bool   `yaml:"enabled"`
 	SwitchThreshold    int    `yaml:"switch_threshold,omitempty"`
+	WarnThreshold      int    `yaml:"warn_threshold,omitempty"`
 	PreserveScrollback *bool  `yaml:"preserve_scrollback,omitempty"`
 	// ResetCycle is the subscription reset window for this provider.
 	// Accepted values: "5h", "weekly", "monthly". Empty means unknown.
@@ -26,6 +27,7 @@ type ProviderConfig struct {
 // Config is the top-level relay configuration.
 type Config struct {
 	SwitchThreshold    int              `yaml:"switch_threshold,omitempty"`
+	WarnThreshold      int              `yaml:"warn_threshold,omitempty"`
 	PreserveScrollback bool             `yaml:"preserve_scrollback,omitempty"`
 	Providers          []ProviderConfig `yaml:"providers"`
 	WorkDir            string           `yaml:"-"` // set at runtime, not serialized
@@ -35,6 +37,7 @@ type Config struct {
 func Default() *Config {
 	return &Config{
 		SwitchThreshold: 95,
+		WarnThreshold:   80,
 		Providers: []ProviderConfig{
 			{Name: "claude", Enabled: true, ResetCycle: "5h"},
 			{Name: "codex", Enabled: true, ResetCycle: "weekly"},
@@ -117,6 +120,44 @@ func (c *Config) ProviderThreshold(name string) int {
 	return c.SwitchThreshold
 }
 
+// ProviderWarnThreshold returns the effective warning (pre-switch) threshold
+// for the provider. It always sits strictly below the switch threshold; when
+// callers haven't configured one, it's derived as switch - 15 (floor 50).
+func (c *Config) ProviderWarnThreshold(name string) int {
+	switchT := c.ProviderThreshold(name)
+
+	configured := 0
+	for _, p := range c.Providers {
+		if p.Name == name {
+			configured = p.WarnThreshold
+			break
+		}
+	}
+	if configured <= 0 {
+		configured = c.WarnThreshold
+	}
+
+	if configured > 0 {
+		if configured >= switchT {
+			// Ignore misconfigurations that would short-circuit the switch stage.
+			configured = switchT - 1
+		}
+		if configured < 1 {
+			return 0
+		}
+		return configured
+	}
+
+	derived := switchT - 15
+	if derived < 50 {
+		derived = 50
+	}
+	if derived >= switchT {
+		return 0
+	}
+	return derived
+}
+
 // ProviderPreserveScrollback returns whether inline/no-alt-screen mode should be used.
 func (c *Config) ProviderPreserveScrollback(name string) bool {
 	for _, p := range c.Providers {
@@ -172,6 +213,9 @@ func (c *Config) merge(overlay *Config) {
 	if overlay.SwitchThreshold > 0 {
 		c.SwitchThreshold = overlay.SwitchThreshold
 	}
+	if overlay.WarnThreshold > 0 {
+		c.WarnThreshold = overlay.WarnThreshold
+	}
 	if len(overlay.Providers) > 0 {
 		c.Providers = append([]ProviderConfig(nil), overlay.Providers...)
 	}
@@ -181,9 +225,15 @@ func (c *Config) normalize() {
 	if c.SwitchThreshold <= 0 || c.SwitchThreshold > 100 {
 		c.SwitchThreshold = 95
 	}
+	if c.WarnThreshold < 0 || c.WarnThreshold > 100 {
+		c.WarnThreshold = 0
+	}
 	for i := range c.Providers {
 		if c.Providers[i].SwitchThreshold < 0 || c.Providers[i].SwitchThreshold > 100 {
 			c.Providers[i].SwitchThreshold = 0
+		}
+		if c.Providers[i].WarnThreshold < 0 || c.Providers[i].WarnThreshold > 100 {
+			c.Providers[i].WarnThreshold = 0
 		}
 		switch c.Providers[i].ResetCycle {
 		case "", "5h", "weekly", "monthly":

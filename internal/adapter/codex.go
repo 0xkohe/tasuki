@@ -258,7 +258,7 @@ func (c *Codex) parseEvent(evt *codexEvent, raw []byte) *Event {
 		content := ""
 		if evt.Error != nil {
 			content = evt.Error.Message
-			if evt.Error.Code == "rate_limit_exceeded" || strings.Contains(content, "rate limit") {
+			if evt.Error.Code == "rate_limit_exceeded" || LooksLikeHardRateLimitText(content) {
 				return &Event{
 					Type:    EventRateLimit,
 					Content: content,
@@ -308,17 +308,5 @@ func codexExecuteArgs(prompt string, yolo bool) []string {
 
 func isRateLimitError(text string) bool {
 	lower := strings.ToLower(text)
-	patterns := []string{
-		"rate limit",
-		"rate_limit",
-		"too many requests",
-		"429",
-		"quota exceeded",
-	}
-	for _, p := range patterns {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
+	return LooksLikeHardRateLimitText(text) || strings.Contains(lower, "429")
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -85,6 +86,25 @@ type handoffData struct {
 	DiffSummary string
 }
 
+type textReplacement struct {
+	re          *regexp.Regexp
+	replacement string
+}
+
+var resumeTextReplacements = []textReplacement{
+	{re: regexp.MustCompile(`(?i)\brate_limit_exceeded\b`), replacement: "rate-limit-exceeded"},
+	{re: regexp.MustCompile(`(?i)\brate[_ ]limit\s+exceeded\b`), replacement: "rate-limit-exceeded"},
+	{re: regexp.MustCompile(`(?i)\brate[_ ]limit\s+reached\b`), replacement: "rate-limit-reached"},
+	{re: regexp.MustCompile(`(?i)\brate limited\b`), replacement: "rate-limited"},
+	{re: regexp.MustCompile(`(?i)\brate[_ ]limit\b`), replacement: "rate-limit"},
+	{re: regexp.MustCompile(`(?i)\btoo many requests\b`), replacement: "too-many-requests"},
+	{re: regexp.MustCompile(`(?i)\bquota exceeded\b`), replacement: "quota-exceeded"},
+	{re: regexp.MustCompile(`(?i)\busage limit exceeded\b`), replacement: "usage-limit-exceeded"},
+	{re: regexp.MustCompile(`(?i)\bsession limit reached\b`), replacement: "session-limit-reached"},
+	{re: regexp.MustCompile(`(?i)\bcapacity limit reached\b`), replacement: "capacity-limit-reached"},
+	{re: regexp.MustCompile(`(?i)\bcapacity limit exceeded\b`), replacement: "capacity-limit-exceeded"},
+}
+
 // GenerateHandoffMD renders the handoff markdown from session state.
 func GenerateHandoffMD(sess *state.Session) (string, error) {
 	tmpl, err := template.New("handoff").Parse(handoffTemplate)
@@ -105,10 +125,10 @@ func GenerateResumePrompt(sess *state.Session, workDir string) (string, error) {
 		return "", fmt.Errorf("parse resume template: %w", err)
 	}
 
-	diff := getGitDiffSummary(workDir)
+	diff := sanitizeResumeText(getGitDiffSummary(workDir))
 
 	data := handoffData{
-		Session:     sess,
+		Session:     sanitizeResumeSession(sess),
 		DiffSummary: diff,
 	}
 
@@ -117,6 +137,57 @@ func GenerateResumePrompt(sess *state.Session, workDir string) (string, error) {
 		return "", fmt.Errorf("execute resume template: %w", err)
 	}
 	return buf.String(), nil
+}
+
+func sanitizeResumeSession(sess *state.Session) *state.Session {
+	if sess == nil {
+		return nil
+	}
+
+	clone := *sess
+	clone.Goal = sanitizeResumeText(sess.Goal)
+	clone.Constraints = sanitizeResumeStrings(sess.Constraints)
+	clone.CompletedSteps = sanitizeResumeStrings(sess.CompletedSteps)
+	clone.PendingSteps = sanitizeResumeStrings(sess.PendingSteps)
+	clone.FilesTouched = sanitizeResumeStrings(sess.FilesTouched)
+	clone.Decisions = make([]state.Decision, len(sess.Decisions))
+	for i, decision := range sess.Decisions {
+		clone.Decisions[i] = state.Decision{
+			Title:  sanitizeResumeText(decision.Title),
+			Reason: sanitizeResumeText(decision.Reason),
+		}
+	}
+	clone.ProviderHistory = make([]state.ProviderEntry, len(sess.ProviderHistory))
+	for i, entry := range sess.ProviderHistory {
+		clone.ProviderHistory[i] = state.ProviderEntry{
+			Provider: sanitizeResumeText(entry.Provider),
+			Status:   sanitizeResumeText(entry.Status),
+			At:       entry.At,
+			Cycle:    entry.Cycle,
+			ResetsAt: entry.ResetsAt,
+		}
+	}
+	clone.CurrentProvider = sanitizeResumeText(sess.CurrentProvider)
+	clone.RecentSummary = sanitizeResumeText(sess.RecentSummary)
+	clone.RecentTranscript = sanitizeResumeText(sess.RecentTranscript)
+	clone.LastOutput = sanitizeResumeText(sess.LastOutput)
+	return &clone
+}
+
+func sanitizeResumeStrings(values []string) []string {
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = sanitizeResumeText(value)
+	}
+	return out
+}
+
+func sanitizeResumeText(text string) string {
+	out := text
+	for _, replacement := range resumeTextReplacements {
+		out = replacement.re.ReplaceAllString(out, replacement.replacement)
+	}
+	return out
 }
 
 func getGitDiffSummary(dir string) string {

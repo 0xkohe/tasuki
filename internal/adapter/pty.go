@@ -11,17 +11,18 @@ import (
 	"github.com/creack/pty"
 )
 
-// exactRateLimitPatterns are literal strings that indicate a hard rate limit.
-var exactRateLimitPatterns = []string{
-	"rate limit",
-	"rate_limit",
-	"too many requests",
-	"quota exceeded",
-	"usage limit exceeded",
-	"capacity limit",
-	"limit reached",
-	"try again later",
-	"you've hit your",
+// hardRateLimitRegexes match hard-stop rate-limit messages with enough context
+// to avoid tripping on normal discussion of "rate limits" in handoff prompts.
+var hardRateLimitRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`\brate_limit_exceeded\b`),
+	regexp.MustCompile(`\brate[_ ]limit(?:\s+has\s+been)?\s+(?:reached|exceeded)\b`),
+	regexp.MustCompile(`\b(?:reached|exceeded|hit|hitting)\b[^\r\n]{0,40}\brate[_ ]limit\b`),
+	regexp.MustCompile(`\brate limited\b`),
+	regexp.MustCompile(`\byou'?ve hit your[^\r\n]{0,40}\brate[_ ]limit\b`),
+	regexp.MustCompile(`\btoo many requests\b`),
+	regexp.MustCompile(`\bquota exceeded\b`),
+	regexp.MustCompile(`\busage limit exceeded\b`),
+	regexp.MustCompile(`\bcapacity limit(?:\s+(?:reached|exceeded))\b`),
 }
 
 // usagePercentRegex matches Claude Code's built-in usage message:
@@ -344,16 +345,15 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 		}
 	}
 
-	// 5. Check exact rate limit phrases (hard limit fallback).
-	for _, pattern := range exactRateLimitPatterns {
-		if strings.Contains(lower, pattern) {
-			return &Event{
-				Type:    EventRateLimit,
-				Content: pattern,
-				RateLimit: &RateLimitInfo{
-					Type: "hard_limit",
-				},
-			}
+	// 5. Check explicit hard-limit phrases as a fallback when no provider-
+	// specific structured signal is available.
+	if match := findHardRateLimitMatch(lower); match != "" {
+		return &Event{
+			Type:    EventRateLimit,
+			Content: match,
+			RateLimit: &RateLimitInfo{
+				Type: "hard_limit",
+			},
 		}
 	}
 
@@ -505,6 +505,23 @@ func (m *outputMonitor) RecentOutput() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return summarizeRecentOutput(m.history.String(), 4000, 40)
+}
+
+// LooksLikeHardRateLimitText reports whether text contains an explicit hard
+// rate-limit message. This is shared by PTY monitoring and non-interactive
+// error handling so they interpret provider output consistently.
+func LooksLikeHardRateLimitText(text string) bool {
+	return findHardRateLimitMatch(text) != ""
+}
+
+func findHardRateLimitMatch(text string) string {
+	normalized := strings.ToLower(stripAnsi(text))
+	for _, re := range hardRateLimitRegexes {
+		if match := re.FindString(normalized); match != "" {
+			return match
+		}
+	}
+	return ""
 }
 
 func appendBounded(dst *strings.Builder, chunk string, max int) {

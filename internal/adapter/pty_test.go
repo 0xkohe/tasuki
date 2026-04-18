@@ -62,6 +62,23 @@ func TestDetectRateLimitFromSessionLimitReached(t *testing.T) {
 	}
 }
 
+func TestDetectRateLimitFromExplicitHardLimitPhrase(t *testing.T) {
+	evt := detectRateLimit("Error: rate limit reached, please try again later", "claude", 95)
+	if evt == nil {
+		t.Fatal("expected rate limit event")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Type != "hard_limit" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+func TestDetectRateLimitIgnoresPlainDiscussion(t *testing.T) {
+	evt := detectRateLimit("This answer explains how rate limit handling works.", "claude", 95)
+	if evt != nil {
+		t.Fatalf("expected no event, got %#v", evt)
+	}
+}
+
 func TestDoesNotDetectCustomProgressBar(t *testing.T) {
 	evt := detectRateLimit("5h █████████▉ 99%", "claude", 95)
 	if evt != nil {
@@ -94,6 +111,15 @@ func TestOutputMonitorRecentOutputUsesPlainTextHistory(t *testing.T) {
 	want := "hello\nworld"
 	if got != want {
 		t.Fatalf("RecentOutput() = %q, want %q", got, want)
+	}
+}
+
+func TestLooksLikeHardRateLimitText(t *testing.T) {
+	if !LooksLikeHardRateLimitText("too many requests") {
+		t.Fatal("expected hard rate limit match")
+	}
+	if LooksLikeHardRateLimitText("Let's talk about rate limit policy changes.") {
+		t.Fatal("expected plain discussion to be ignored")
 	}
 }
 

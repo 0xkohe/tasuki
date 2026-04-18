@@ -21,17 +21,17 @@ import (
 
 // Orchestrator manages provider lifecycle and failover.
 type Orchestrator struct {
-	providers     []adapter.Provider
-	current       int
-	session       *state.Session
-	store         *state.Store
-	cfg           *config.Config
-	workDir       string
-	resume        bool
-	preferred     string
+	providers      []adapter.Provider
+	current        int
+	session        *state.Session
+	store          *state.Store
+	cfg            *config.Config
+	workDir        string
+	resume         bool
+	preferred      string
 	ignoreCooldown bool
-	providerState *state.ProviderState
-	initialPick   selectionResult
+	providerState  *state.ProviderState
+	initialPick    selectionResult
 }
 
 // New creates and initializes an Orchestrator. `preferred` corresponds to the
@@ -74,16 +74,16 @@ func New(cfg *config.Config, workDir string, resume bool, preferred string, igno
 	}
 
 	return &Orchestrator{
-		providers:     providers,
-		current:       pick.Index,
-		store:         store,
-		cfg:           cfg,
-		workDir:       workDir,
-		resume:        resume,
-		preferred:     preferred,
+		providers:      providers,
+		current:        pick.Index,
+		store:          store,
+		cfg:            cfg,
+		workDir:        workDir,
+		resume:         resume,
+		preferred:      preferred,
 		ignoreCooldown: ignoreCooldown,
-		providerState: ps,
-		initialPick:   pick,
+		providerState:  ps,
+		initialPick:    pick,
 	}, nil
 }
 
@@ -535,20 +535,5 @@ func (o *Orchestrator) printStatus() {
 }
 
 func isLikelyRateLimit(text string) bool {
-	lower := strings.ToLower(text)
-	patterns := []string{
-		"rate limit",
-		"rate_limit",
-		"too many requests",
-		"429",
-		"quota exceeded",
-		"usage limit",
-		"capacity",
-	}
-	for _, p := range patterns {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
+	return adapter.LooksLikeHardRateLimitText(text) || strings.Contains(strings.ToLower(text), "429")
 }

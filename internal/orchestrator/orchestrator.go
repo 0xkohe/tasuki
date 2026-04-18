@@ -133,6 +133,12 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 			}
 		}
 
+		// Print the ready banner BEFORE enabling raw mode. term.MakeRaw disables
+		// OPOST/ONLCR on the shared TTY, so a trailing "\n" would no longer
+		// return the cursor to column 0 — the next provider's banner would then
+		// render offset by the length of this line.
+		ui.ProviderReady(providerName, withHandoff)
+
 		// Put terminal into raw mode for PTY passthrough
 		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 		if err != nil {
@@ -148,8 +154,6 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 			}
 			continue
 		}
-
-		ui.ProviderReady(providerName, withHandoff)
 
 		// Handle terminal resize (SIGWINCH)
 		sigWinch := make(chan os.Signal, 1)

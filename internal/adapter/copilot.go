@@ -71,10 +71,7 @@ func (c *Copilot) SendInput(sess *InteractiveSession, text string) error {
 }
 
 func (c *Copilot) RunInteractive(ctx context.Context, workDir string, initialPrompt string) (*InteractiveSession, error) {
-	args := []string{"copilot"}
-	if initialPrompt != "" {
-		args = append(args, "-i", initialPrompt)
-	}
+	args := copilotInteractiveArgs(initialPrompt, c.opts.YoloMode)
 
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	if workDir != "" {
@@ -145,12 +142,7 @@ func (c *Copilot) Execute(ctx context.Context, req *Request) (<-chan Event, erro
 		prompt = req.Context + "\n\n" + prompt
 	}
 
-	args := []string{
-		"copilot",
-		"-p", prompt,
-		"--output-format", "json",
-		"--allow-all-tools",
-	}
+	args := copilotExecuteArgs(prompt, c.opts.YoloMode)
 
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	if req.WorkDir != "" {
@@ -284,4 +276,23 @@ func (c *Copilot) parseEvent(evt *copilotEvent, raw []byte) *Event {
 	}
 
 	return nil
+}
+
+// copilotInteractiveArgs builds the argument list for `gh copilot` in interactive mode.
+func copilotInteractiveArgs(prompt string, yolo bool) []string {
+	args := []string{"copilot"}
+	if prompt != "" {
+		args = append(args, "-i", prompt)
+	}
+	if yolo {
+		args = append(args, "--allow-all-tools")
+	}
+	return args
+}
+
+// copilotExecuteArgs builds the argument list for `gh copilot -p ...` in non-interactive mode.
+// --allow-all-tools is required for Copilot's automated flow and is always added.
+func copilotExecuteArgs(prompt string, yolo bool) []string {
+	_ = yolo
+	return []string{"copilot", "-p", prompt, "--output-format", "json", "--allow-all-tools"}
 }

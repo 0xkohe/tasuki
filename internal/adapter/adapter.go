@@ -54,6 +54,8 @@ type Options struct {
 	SwitchThreshold    int
 	WarnThreshold      int
 	PreserveScrollback bool
+	// YoloMode enables each provider's permission/sandbox bypass flag.
+	YoloMode bool
 }
 
 // Request represents a prompt to send to a provider.

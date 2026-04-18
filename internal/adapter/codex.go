@@ -74,13 +74,7 @@ func (c *Codex) SendInput(sess *InteractiveSession, text string) error {
 }
 
 func (c *Codex) RunInteractive(ctx context.Context, workDir string, initialPrompt string) (*InteractiveSession, error) {
-	args := []string{}
-	if c.opts.PreserveScrollback {
-		args = append(args, "--no-alt-screen")
-	}
-	if initialPrompt != "" {
-		args = append(args, initialPrompt)
-	}
+	args := codexInteractiveArgs(initialPrompt, c.opts.PreserveScrollback, c.opts.YoloMode)
 
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	if workDir != "" {
@@ -151,12 +145,7 @@ func (c *Codex) Execute(ctx context.Context, req *Request) (<-chan Event, error)
 		prompt = req.Context + "\n\n" + prompt
 	}
 
-	args := []string{
-		"exec",
-		prompt,
-		"--json",
-		"--full-auto",
-	}
+	args := codexExecuteArgs(prompt, c.opts.YoloMode)
 
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	if req.WorkDir != "" {
@@ -288,6 +277,33 @@ func (c *Codex) parseEvent(evt *codexEvent, raw []byte) *Event {
 	}
 
 	return nil
+}
+
+// codexInteractiveArgs builds the argument list for `codex` in interactive mode.
+func codexInteractiveArgs(prompt string, preserveScrollback, yolo bool) []string {
+	var args []string
+	if preserveScrollback {
+		args = append(args, "--no-alt-screen")
+	}
+	if yolo {
+		args = append(args, "--yolo")
+	}
+	if prompt != "" {
+		args = append(args, prompt)
+	}
+	return args
+}
+
+// codexExecuteArgs builds the argument list for `codex exec ...` in non-interactive mode.
+// In YOLO mode the sandbox/approval bypass flag replaces --full-auto.
+func codexExecuteArgs(prompt string, yolo bool) []string {
+	args := []string{"exec", prompt, "--json"}
+	if yolo {
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	} else {
+		args = append(args, "--full-auto")
+	}
+	return args
 }
 
 func isRateLimitError(text string) bool {

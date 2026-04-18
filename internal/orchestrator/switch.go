@@ -229,6 +229,7 @@ func initProviders(cfg *config.Config) []adapter.Provider {
 				SwitchThreshold:    cfg.ProviderThreshold(name),
 				WarnThreshold:      cfg.ProviderWarnThreshold(name),
 				PreserveScrollback: cfg.ProviderPreserveScrollback(name),
+				YoloMode:           cfg.Yolo,
 			})
 			if p.IsAvailable() {
 				providers = append(providers, p)

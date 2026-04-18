@@ -21,6 +21,7 @@ func main() {
 	var initGlobal bool
 	var resumeFlag bool
 	var ignoreCooldown bool
+	var yoloFlag bool
 
 	rootCmd := &cobra.Command{
 		Use:   "tasuki [prompt]",
@@ -47,6 +48,9 @@ provider automatically.`,
 
 			cfg := config.Load(workDir)
 			cfg.WorkDir = workDir
+			if yoloFlag || envYolo() {
+				cfg.Yolo = true
+			}
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -83,6 +87,7 @@ provider automatically.`,
 	rootCmd.Flags().BoolVar(&pipeMode, "pipe", false, "non-interactive mode (formats output)")
 	rootCmd.Flags().BoolVar(&resumeFlag, "resume", false, "resume the previous tasuki session in this project")
 	rootCmd.Flags().BoolVar(&ignoreCooldown, "ignore-cooldown", false, "ignore persisted cooldown state on startup and re-evaluate providers from top priority")
+	rootCmd.PersistentFlags().BoolVar(&yoloFlag, "yolo", false, "launch each AI CLI with its permission/sandbox bypass flag (dangerous)")
 
 	var initNonInteractive bool
 	initCmd := &cobra.Command{
@@ -120,6 +125,9 @@ provider automatically.`,
 			}
 			cfg := config.Load(workDir)
 			cfg.WorkDir = workDir
+			if yoloFlag || envYolo() {
+				cfg.Yolo = true
+			}
 
 			orch, err := orchestrator.New(cfg, workDir, true, "", false)
 			if err != nil {
@@ -137,4 +145,14 @@ provider automatically.`,
 		fmt.Fprintf(os.Stderr, "%s%s%s\n", ui.Red, err, ui.Reset)
 		os.Exit(1)
 	}
+}
+
+// envYolo returns true when TASUKI_YOLO is set to a truthy value.
+func envYolo() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("TASUKI_YOLO")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

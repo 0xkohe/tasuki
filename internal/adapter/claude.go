@@ -99,11 +99,7 @@ func (c *Claude) RunInteractive(ctx context.Context, workDir string, initialProm
 		}
 	}
 
-	args := []string{}
-	if initialPrompt != "" {
-		// Use --resume to continue, or just pass prompt as argument for first message
-		args = append(args, initialPrompt)
-	}
+	args := claudeInteractiveArgs(initialPrompt, c.opts.YoloMode)
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	if workDir != "" {
@@ -181,11 +177,7 @@ func (c *Claude) Execute(ctx context.Context, req *Request) (<-chan Event, error
 		prompt = req.Context + "\n\n" + prompt
 	}
 
-	args := []string{
-		"-p", prompt,
-		"--output-format", "stream-json",
-		"--verbose",
-	}
+	args := claudeExecuteArgs(prompt, c.opts.YoloMode)
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	if req.WorkDir != "" {
@@ -320,6 +312,27 @@ func (c *Claude) parseEvent(evt *claudeStreamEvent, raw []byte) *Event {
 	}
 
 	return nil
+}
+
+// claudeInteractiveArgs builds the argument list for `claude` in interactive mode.
+func claudeInteractiveArgs(prompt string, yolo bool) []string {
+	var args []string
+	if yolo {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	if prompt != "" {
+		args = append(args, prompt)
+	}
+	return args
+}
+
+// claudeExecuteArgs builds the argument list for `claude -p ...` in non-interactive mode.
+func claudeExecuteArgs(prompt string, yolo bool) []string {
+	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
+	if yolo {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	return args
 }
 
 // claudeRateLimitCycle maps Claude's rateLimitType strings to the canonical cycle.

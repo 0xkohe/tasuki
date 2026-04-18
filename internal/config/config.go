@@ -26,11 +26,13 @@ type ProviderConfig struct {
 
 // Config is the top-level relay configuration.
 type Config struct {
-	SwitchThreshold    int              `yaml:"switch_threshold,omitempty"`
-	WarnThreshold      int              `yaml:"warn_threshold,omitempty"`
-	PreserveScrollback bool             `yaml:"preserve_scrollback,omitempty"`
-	Providers          []ProviderConfig `yaml:"providers"`
-	WorkDir            string           `yaml:"-"` // set at runtime, not serialized
+	SwitchThreshold    int  `yaml:"switch_threshold,omitempty"`
+	WarnThreshold      int  `yaml:"warn_threshold,omitempty"`
+	PreserveScrollback bool `yaml:"preserve_scrollback,omitempty"`
+	// Yolo enables each provider's permission/sandbox bypass flag when true.
+	Yolo      bool             `yaml:"yolo,omitempty"`
+	Providers []ProviderConfig `yaml:"providers"`
+	WorkDir   string           `yaml:"-"` // set at runtime, not serialized
 }
 
 // Default returns the default configuration.
@@ -215,6 +217,9 @@ func (c *Config) merge(overlay *Config) {
 	}
 	if overlay.WarnThreshold > 0 {
 		c.WarnThreshold = overlay.WarnThreshold
+	}
+	if overlay.Yolo {
+		c.Yolo = true
 	}
 	if len(overlay.Providers) > 0 {
 		c.Providers = append([]ProviderConfig(nil), overlay.Providers...)

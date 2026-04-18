@@ -142,6 +142,25 @@ func TestProviderPriorityFallsBackToArrayPosition(t *testing.T) {
 	}
 }
 
+func TestLoadPropagatesYoloFlag(t *testing.T) {
+	root := t.TempDir()
+	globalDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", globalDir)
+
+	localPath := filepath.Join(root, ".tasuki", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(localPath, []byte("yolo: true\nproviders:\n  - name: claude\n    enabled: true\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Load(root)
+	if !cfg.Yolo {
+		t.Fatal("Load should propagate yolo: true from local config")
+	}
+}
+
 func TestLoadMergesGlobalAndLocalConfig(t *testing.T) {
 	root := t.TempDir()
 	globalDir := t.TempDir()

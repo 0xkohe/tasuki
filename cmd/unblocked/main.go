@@ -12,6 +12,7 @@ import (
 	"github.com/kooooohe/unblocked/internal/orchestrator"
 	"github.com/kooooohe/unblocked/internal/ui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -33,6 +34,15 @@ provider automatically.`,
 			workDir, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("getwd: %w", err)
+			}
+
+			if !config.ConfigExists(workDir) {
+				if _, err := config.InteractiveInit(config.InitOptions{
+					Root:   workDir,
+					NonTTY: !term.IsTerminal(int(os.Stdin.Fd())),
+				}); err != nil {
+					return fmt.Errorf("initial setup: %w", err)
+				}
 			}
 
 			cfg := config.Load(workDir)
@@ -74,31 +84,31 @@ provider automatically.`,
 	rootCmd.Flags().BoolVar(&resumeFlag, "resume", false, "resume the previous unblocked session in this project")
 	rootCmd.Flags().BoolVar(&ignoreCooldown, "ignore-cooldown", false, "ignore persisted cooldown state on startup and re-evaluate providers from top priority")
 
+	var initNonInteractive bool
 	initCmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize unblocked configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.Default()
-			if initGlobal {
-				if err := cfg.SaveGlobal(); err != nil {
-					return err
-				}
-				ui.InfoMessage("initialized " + config.GlobalPath())
-				return nil
-			}
-
 			workDir, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			if err := cfg.SaveLocal(workDir); err != nil {
+
+			nonTTY := initNonInteractive || !term.IsTerminal(int(os.Stdin.Fd()))
+			path, err := config.InteractiveInit(config.InitOptions{
+				Root:   workDir,
+				Global: initGlobal,
+				NonTTY: nonTTY,
+			})
+			if err != nil {
 				return err
 			}
-			ui.InfoMessage("initialized " + config.LocalPath(workDir))
+			ui.InfoMessage("initialized " + path)
 			return nil
 		},
 	}
 	initCmd.Flags().BoolVar(&initGlobal, "global", false, "write config to the global path instead of the current project")
+	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "skip prompts and enable every detected CLI with default thresholds")
 
 	statusCmd := &cobra.Command{
 		Use:   "status",

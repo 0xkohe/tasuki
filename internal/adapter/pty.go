@@ -218,18 +218,6 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 			}
 		}
 
-		// Check Claude Code's generic near-limit warning.
-		if match := usageWarningRegex.FindString(lower); match != "" {
-			return &Event{
-				Type:    EventRateLimit,
-				Content: match,
-				RateLimit: &RateLimitInfo{
-					Type:  "usage_warning",
-					Cycle: "5h",
-				},
-			}
-		}
-
 		// Check explicit session-limit reached messages.
 		if match := sessionLimitReachedRegex.FindString(lower); match != "" {
 			return &Event{
@@ -405,6 +393,16 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 						Cycle: "5h",
 					},
 				}
+			}
+		}
+		if match := usageWarningRegex.FindString(lower); match != "" {
+			return &Event{
+				Type:    EventRateLimitWarning,
+				Content: match,
+				RateLimit: &RateLimitInfo{
+					Type:  "usage_warning",
+					Cycle: "5h",
+				},
 			}
 		}
 

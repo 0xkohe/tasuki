@@ -92,6 +92,13 @@ type textReplacement struct {
 }
 
 var resumeTextReplacements = []textReplacement{
+	{re: regexp.MustCompile(`(?i)\bapproaching usage limit(?:\s*[·•.-]\s*resets?(?: at)? [^\r\n]+)?`), replacement: "approaching-usage-threshold"},
+	{re: regexp.MustCompile(`(?i)\byou'?ve used (\d+)% of your(?: [a-z]+)? session limit\b`), replacement: "used-session-threshold-$1%"},
+	{re: regexp.MustCompile(`(?i)claude limits 5h:(\d+|na)% 7d:(\d+|na)%`), replacement: "claude-usage-status 5h:$1 7d:$2"},
+	{re: regexp.MustCompile(`(?i)5h\s+(\d+)%\s*[·|]\s*weekly\s+(\d+)%`), replacement: "budget-status 5h:$1 weekly:$2"},
+	{re: regexp.MustCompile(`(?i)\bused (\d+)% of (?:the )?(?:weekly |5h |five-hour )?usage\b`), replacement: "usage-at-$1%"},
+	{re: regexp.MustCompile(`(?i)\b(\d+)% left\b`), replacement: "$1%-remaining-budget"},
+	{re: regexp.MustCompile(`(?i)\bapproach(?:es|ing)? (\d+)% of the token limit\b`), replacement: "approaching-token-threshold-$1%"},
 	{re: regexp.MustCompile(`(?i)\brate_limit_exceeded\b`), replacement: "rate-limit-exceeded"},
 	{re: regexp.MustCompile(`(?i)\brate[_ ]limit\s+exceeded\b`), replacement: "rate-limit-exceeded"},
 	{re: regexp.MustCompile(`(?i)\brate[_ ]limit\s+reached\b`), replacement: "rate-limit-reached"},

@@ -31,21 +31,46 @@ func TestGenerateResumePromptIncludesLastOutput(t *testing.T) {
 
 func TestGenerateResumePromptSanitizesHardLimitPhrases(t *testing.T) {
 	sess := state.NewSession("sess-1", "investigate rate limit loop", "codex")
-	sess.RecentSummary = "Warnings/errors: rate limit reached | too many requests"
-	sess.RecentTranscript = "assistant: the previous provider was rate limited"
-	sess.LastOutput = "quota exceeded"
+	sess.RecentSummary = "Warnings/errors: rate limit reached | too many requests | approaching usage limit · resets at 10am"
+	sess.RecentTranscript = "assistant: the previous provider was rate limited; you've used 99% of your session limit"
+	sess.LastOutput = "quota exceeded\nclaude limits 5h:96% 7d:12%\n5h 20% · weekly 74%\nused 82% of the weekly usage already"
 
 	prompt, err := GenerateResumePrompt(sess, t.TempDir())
 	if err != nil {
 		t.Fatalf("GenerateResumePrompt() error = %v", err)
 	}
 
-	for _, raw := range []string{"rate limit reached", "too many requests", "rate limited", "quota exceeded"} {
+	for _, raw := range []string{
+		"rate limit reached",
+		"too many requests",
+		"rate limited",
+		"quota exceeded",
+		"approaching usage limit",
+		"you've used 99% of your session limit",
+		"claude limits 5h:96% 7d:12%",
+		"5h 20% · weekly 74%",
+		"used 82% of the weekly usage already",
+	} {
 		if strings.Contains(strings.ToLower(prompt), raw) {
 			t.Fatalf("GenerateResumePrompt() leaked raw trigger phrase %q:\n%s", raw, prompt)
 		}
 	}
 	if !strings.Contains(prompt, "rate-limit-reached") {
 		t.Fatalf("GenerateResumePrompt() missing sanitized phrase:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "approaching-usage-threshold") {
+		t.Fatalf("GenerateResumePrompt() missing sanitized usage-warning phrase:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "used-session-threshold-99%") {
+		t.Fatalf("GenerateResumePrompt() missing sanitized usage-percent phrase:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "claude-usage-status 5h:96 7d:12") {
+		t.Fatalf("GenerateResumePrompt() missing sanitized Claude status:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "budget-status 5h:20 weekly:74") {
+		t.Fatalf("GenerateResumePrompt() missing sanitized Codex status:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "usage-at-82%") {
+		t.Fatalf("GenerateResumePrompt() missing sanitized Codex usage phrase:\n%s", prompt)
 	}
 }

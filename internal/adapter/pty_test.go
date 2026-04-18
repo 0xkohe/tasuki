@@ -42,13 +42,10 @@ func TestDetectRateLimitFromStructuredSevenDayStatusLine(t *testing.T) {
 	}
 }
 
-func TestDetectRateLimitFromApproachingUsageWarning(t *testing.T) {
+func TestDetectRateLimitDoesNotSwitchOnApproachingUsageWarning(t *testing.T) {
 	evt := detectRateLimit("approaching usage limit · resets at 10am", "claude", 95)
-	if evt == nil {
-		t.Fatal("expected rate limit event")
-	}
-	if evt.RateLimit == nil || evt.RateLimit.Type != "usage_warning" {
-		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	if evt != nil {
+		t.Fatalf("expected no hard-switch event, got %#v", evt)
 	}
 }
 
@@ -210,6 +207,19 @@ func TestDetectRateLimitWarningBetweenThresholds(t *testing.T) {
 		t.Fatalf("unexpected event type: %v", evt.Type)
 	}
 	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_85%" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+func TestDetectRateLimitWarningFromApproachingUsageWarning(t *testing.T) {
+	evt := detectRateLimitWarning("approaching usage limit · resets at 10am", "claude", 80, 95)
+	if evt == nil {
+		t.Fatal("expected warning event")
+	}
+	if evt.Type != EventRateLimitWarning {
+		t.Fatalf("unexpected event type: %v", evt.Type)
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Type != "usage_warning" {
 		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
 	}
 }

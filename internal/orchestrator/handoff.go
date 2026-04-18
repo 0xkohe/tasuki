@@ -81,6 +81,18 @@ IMPORTANT: Do not restart the task. Continue from exactly where it was left off.
 Before finishing, output a structured summary of what you did and what remains.
 `
 
+const interactiveResumePromptTemplate = `You are continuing an in-progress coding task in the current repository.
+Read .tasuki/handoff.md for the saved handoff context, inspect the current git diff, and continue exactly from where the previous agent stopped.
+
+## Goal
+{{ .Goal }}
+{{ if .DiffSummary }}## Current Git Diff Summary
+{{ .DiffSummary }}
+{{ end }}
+IMPORTANT: Do not restart the task. Continue from the saved handoff file and the current workspace state.
+Before finishing, output a structured summary of what you did and what remains.
+`
+
 type handoffData struct {
 	*state.Session
 	DiffSummary string
@@ -119,7 +131,7 @@ func GenerateHandoffMD(sess *state.Session) (string, error) {
 		return "", fmt.Errorf("parse handoff template: %w", err)
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, sess); err != nil {
+	if err := tmpl.Execute(&buf, sanitizeResumeSession(sess)); err != nil {
 		return "", fmt.Errorf("execute handoff template: %w", err)
 	}
 	return buf.String(), nil
@@ -142,6 +154,27 @@ func GenerateResumePrompt(sess *state.Session, workDir string) (string, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("execute resume template: %w", err)
+	}
+	return buf.String(), nil
+}
+
+// GenerateInteractiveResumePrompt creates a short resume prompt for PTY-backed
+// interactive providers. Keeping this compact avoids argv size issues and stops
+// providers from echoing the full handoff back into the rate-limit detector.
+func GenerateInteractiveResumePrompt(sess *state.Session, workDir string) (string, error) {
+	tmpl, err := template.New("interactive-resume").Parse(interactiveResumePromptTemplate)
+	if err != nil {
+		return "", fmt.Errorf("parse interactive resume template: %w", err)
+	}
+
+	data := handoffData{
+		Session:     sanitizeResumeSession(sess),
+		DiffSummary: sanitizeResumeText(getGitDiffSummary(workDir)),
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("execute interactive resume template: %w", err)
 	}
 	return buf.String(), nil
 }

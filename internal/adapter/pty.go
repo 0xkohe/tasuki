@@ -14,15 +14,14 @@ import (
 // hardRateLimitRegexes match hard-stop rate-limit messages with enough context
 // to avoid tripping on normal discussion of "rate limits" in handoff prompts.
 var hardRateLimitRegexes = []*regexp.Regexp{
-	regexp.MustCompile(`\brate_limit_exceeded\b`),
-	regexp.MustCompile(`\brate[_ ]limit(?:\s+has\s+been)?\s+(?:reached|exceeded)\b`),
-	regexp.MustCompile(`\b(?:reached|exceeded|hit|hitting)\b[^\r\n]{0,40}\brate[_ ]limit\b`),
-	regexp.MustCompile(`\brate limited\b`),
-	regexp.MustCompile(`\byou'?ve hit your[^\r\n]{0,40}\brate[_ ]limit\b`),
-	regexp.MustCompile(`\btoo many requests\b`),
-	regexp.MustCompile(`\bquota exceeded\b`),
-	regexp.MustCompile(`\busage limit exceeded\b`),
-	regexp.MustCompile(`\bcapacity limit(?:\s+(?:reached|exceeded))\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\brate_limit_exceeded\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\brate[_ ]limit(?:\s+has\s+been)?\s+(?:reached|exceeded)\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\brate limited\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\byou'?ve hit your[^\r\n]{0,40}\brate[_ ]limit\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\btoo many requests\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\bquota exceeded\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\busage limit exceeded\b`),
+	regexp.MustCompile(`(?:^|[\r\n])\s*(?:error[: ]+)?\bcapacity limit(?:\s+(?:reached|exceeded))\b`),
 }
 
 // usagePercentRegex matches Claude Code's built-in usage message:
@@ -516,7 +515,7 @@ func findHardRateLimitMatch(text string) string {
 	normalized := strings.ToLower(stripAnsi(text))
 	for _, re := range hardRateLimitRegexes {
 		if match := re.FindString(normalized); match != "" {
-			return match
+			return strings.TrimSpace(match)
 		}
 	}
 	return ""

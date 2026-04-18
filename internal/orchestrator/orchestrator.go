@@ -121,8 +121,9 @@ func (o *Orchestrator) RunPassthrough(ctx context.Context, initialPrompt string)
 		// Build the prompt for this provider
 		prompt := initialPrompt
 		if o.session.HandoffCount > 0 {
-			// This is a handoff — inject resume context
-			resumePrompt, err := GenerateResumePrompt(o.session, o.workDir)
+			// Interactive providers get a short handoff prompt that points them
+			// at .tasuki/handoff.md instead of echoing the full resume context.
+			resumePrompt, err := GenerateInteractiveResumePrompt(o.session, o.workDir)
 			if err != nil {
 				ui.ErrorMessage(fmt.Sprintf("generate resume prompt: %v", err))
 			} else {

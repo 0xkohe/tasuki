@@ -120,6 +120,20 @@ func TestLooksLikeHardRateLimitText(t *testing.T) {
 	}
 }
 
+func TestLooksLikeHardRateLimitTextIgnoresQuotedExamples(t *testing.T) {
+	text := `This should not trigger: patterns like "rate limit exceeded" / "you've hit your rate limit" can appear in explanations.`
+	if LooksLikeHardRateLimitText(text) {
+		t.Fatalf("expected quoted example to be ignored: %q", text)
+	}
+}
+
+func TestLooksLikeHardRateLimitTextMatchesLineScopedError(t *testing.T) {
+	text := "warning\nError: you've hit your rate limit, please try again later"
+	if !LooksLikeHardRateLimitText(text) {
+		t.Fatalf("expected explicit line-scoped error to match: %q", text)
+	}
+}
+
 func TestDetectRateLimitRespectsThreshold(t *testing.T) {
 	evt := detectRateLimit("claude limits 5h:94% 7d:12%", "claude", 95)
 	if evt != nil {

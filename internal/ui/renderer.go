@@ -35,7 +35,10 @@ func ProviderColor(name string) string {
 
 // Banner prints the startup banner.
 func Banner() {
-	fmt.Println(Bold + "tasuki" + Reset + Dim + " — AI CLI failover orchestrator" + Reset)
+	fmt.Println(Cyan + "   ╲╲ ╱╱" + Reset)
+	fmt.Println(Cyan + "    ╲╳╱  " + Blue + "><> " + Green + "><> " + Magenta + "><>  " + Bold + "tasuki" + Reset)
+	fmt.Println(Cyan + "    ╱╳╲  " + Dim + "AI CLI failover orchestrator" + Reset)
+	fmt.Println(Cyan + "   ╱╱ ╲╲" + Reset)
 	fmt.Println()
 }
 

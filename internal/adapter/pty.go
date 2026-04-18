@@ -28,7 +28,7 @@ var exactRateLimitPatterns = []string{
 // "You've used NN% of your session limit"
 var usagePercentRegex = regexp.MustCompile(`you've used (\d+)% of your(?: [a-z]+)? session limit`)
 
-// structuredRateLimitRegex matches unblocked's temporary Claude status line.
+// structuredRateLimitRegex matches tasuki's temporary Claude status line.
 // Example: "Claude limits 5h:96% 7d:12%"
 var structuredRateLimitRegex = regexp.MustCompile(`claude limits 5h:(\d+|na)% 7d:(\d+|na)%`)
 
@@ -176,7 +176,7 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 
 	switch provider {
 	case "claude":
-		// Check unblocked's structured Claude status line derived from rate_limits.
+		// Check tasuki's structured Claude status line derived from rate_limits.
 		// Use the most-recent match — status lines are re-rendered in place and
 		// accumulate in the rolling scan buffer, so the latest value wins.
 		if matches := lastSubmatch(structuredRateLimitRegex, lower); len(matches) > 2 {

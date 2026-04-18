@@ -32,7 +32,7 @@ func TestPrepareAndRestoreClaudeStatusLineOverride(t *testing.T) {
 	if !ok {
 		t.Fatalf("statusLine missing or invalid: %#v", settings["statusLine"])
 	}
-	if command, _ := statusLine["command"].(string); command != shellQuote(filepath.Join(workDir, ".unblocked", "claude-statusline.sh")) {
+	if command, _ := statusLine["command"].(string); command != shellQuote(filepath.Join(workDir, ".tasuki", "claude-statusline.sh")) {
 		t.Fatalf("unexpected command: %q", command)
 	}
 

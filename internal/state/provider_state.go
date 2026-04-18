@@ -14,7 +14,7 @@ type ProviderCooldown struct {
 }
 
 // ProviderState persists provider cooldown information across sessions.
-// Stored in .unblocked/provider_state.json.
+// Stored in .tasuki/provider_state.json.
 type ProviderState struct {
 	Cooldowns map[string]ProviderCooldown `json:"cooldowns"`
 	UpdatedAt string                      `json:"updated_at,omitempty"`

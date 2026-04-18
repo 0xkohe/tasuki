@@ -12,10 +12,10 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
-	"github.com/kooooohe/unblocked/internal/adapter"
-	"github.com/kooooohe/unblocked/internal/config"
-	"github.com/kooooohe/unblocked/internal/state"
-	"github.com/kooooohe/unblocked/internal/ui"
+	"github.com/kooooohe/tasuki/internal/adapter"
+	"github.com/kooooohe/tasuki/internal/config"
+	"github.com/kooooohe/tasuki/internal/state"
+	"github.com/kooooohe/tasuki/internal/ui"
 	"golang.org/x/term"
 )
 

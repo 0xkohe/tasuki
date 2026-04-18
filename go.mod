@@ -1,4 +1,4 @@
-module github.com/kooooohe/unblocked
+module github.com/kooooohe/tasuki
 
 go 1.26.1
 

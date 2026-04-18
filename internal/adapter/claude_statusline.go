@@ -53,7 +53,7 @@ func prepareClaudeStatusLineOverride(workDir string) (*claudeStatusLineOverride,
 		return nil, nil
 	}
 
-	scriptPath := filepath.Join(workDir, ".unblocked", "claude-statusline.sh")
+	scriptPath := filepath.Join(workDir, ".tasuki", "claude-statusline.sh")
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
 		return nil, fmt.Errorf("mkdir status line dir: %w", err)
 	}

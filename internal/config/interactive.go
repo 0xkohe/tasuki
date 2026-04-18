@@ -89,7 +89,7 @@ func InteractiveInit(opts InitOptions) (string, error) {
 	tools := DetectTools()
 
 	fmt.Fprintln(opts.Out)
-	fmt.Fprintln(opts.Out, "Welcome to unblocked. Running first-time setup.")
+	fmt.Fprintln(opts.Out, "Welcome to tasuki. Running first-time setup.")
 	fmt.Fprintln(opts.Out, "Detecting installed AI CLIs...")
 	fmt.Fprintln(opts.Out)
 	for _, t := range tools {

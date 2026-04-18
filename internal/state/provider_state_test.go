@@ -44,7 +44,7 @@ func TestSetAndClearCooldown(t *testing.T) {
 
 func TestProviderStateRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	// Simulate .unblocked directory structure Store expects.
+	// Simulate .tasuki directory structure Store expects.
 	store := NewStore(dir)
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)

@@ -56,7 +56,7 @@ func Load(root string) *Config {
 	return cfg
 }
 
-// SaveLocal writes the config to .unblocked/config.yaml.
+// SaveLocal writes the config to .tasuki/config.yaml.
 func (c *Config) SaveLocal(root string) error {
 	return c.saveToPath(LocalPath(root))
 }
@@ -68,19 +68,19 @@ func (c *Config) SaveGlobal() error {
 
 // LocalPath returns the project-local config file path.
 func LocalPath(root string) string {
-	return filepath.Join(root, ".unblocked", "config.yaml")
+	return filepath.Join(root, ".tasuki", "config.yaml")
 }
 
 // GlobalPath returns the global config file path.
 func GlobalPath() string {
 	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "unblocked", "config.yaml")
+		return filepath.Join(dir, "tasuki", "config.yaml")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".unblocked", "config.yaml")
+		return filepath.Join(".tasuki", "config.yaml")
 	}
-	return filepath.Join(home, ".config", "unblocked", "config.yaml")
+	return filepath.Join(home, ".config", "tasuki", "config.yaml")
 }
 
 func (c *Config) saveToPath(path string) error {

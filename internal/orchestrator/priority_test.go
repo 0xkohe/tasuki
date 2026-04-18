@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kooooohe/unblocked/internal/adapter"
-	"github.com/kooooohe/unblocked/internal/config"
-	"github.com/kooooohe/unblocked/internal/state"
+	"github.com/kooooohe/tasuki/internal/adapter"
+	"github.com/kooooohe/tasuki/internal/config"
+	"github.com/kooooohe/tasuki/internal/state"
 )
 
 // stubProvider implements adapter.Provider for select-logic tests.

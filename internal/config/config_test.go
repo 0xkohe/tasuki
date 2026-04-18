@@ -147,7 +147,7 @@ func TestLoadMergesGlobalAndLocalConfig(t *testing.T) {
 	globalDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", globalDir)
 
-	globalPath := filepath.Join(globalDir, "unblocked", "config.yaml")
+	globalPath := filepath.Join(globalDir, "tasuki", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(globalPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestLoadMergesGlobalAndLocalConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	localPath := filepath.Join(root, ".unblocked", "config.yaml")
+	localPath := filepath.Join(root, ".tasuki", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 		t.Fatal(err)
 	}

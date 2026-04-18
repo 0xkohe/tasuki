@@ -35,7 +35,7 @@ func ProviderColor(name string) string {
 
 // Banner prints the startup banner.
 func Banner() {
-	fmt.Println(Bold + "unblocked" + Reset + Dim + " — AI CLI failover orchestrator" + Reset)
+	fmt.Println(Bold + "tasuki" + Reset + Dim + " — AI CLI failover orchestrator" + Reset)
 	fmt.Println()
 }
 
@@ -48,7 +48,7 @@ func ProviderStatus(name string, index, total int) {
 // SwitchNotice prints a provider switch notification.
 func SwitchNotice(from, to, reason string) {
 	fmt.Println()
-	fmt.Printf(Cyan+Bold+"[unblocked]"+Reset+" failover: %s -> %s"+Dim+" (%s)"+Reset+"\n", from, to, reason)
+	fmt.Printf(Cyan+Bold+"[tasuki]"+Reset+" failover: %s -> %s"+Dim+" (%s)"+Reset+"\n", from, to, reason)
 	fmt.Println()
 }
 
@@ -106,7 +106,7 @@ func InfoMessage(msg string) {
 // nextStatus is a short label like "ready", "auth missing", or "cooldown".
 func PreFailoverWarning(current, next, trigger, nextStatus, detail string) {
 	fmt.Println()
-	fmt.Println(Yellow + Bold + "[unblocked] Approaching Limit" + Reset)
+	fmt.Println(Yellow + Bold + "[tasuki] Approaching Limit" + Reset)
 	fmt.Printf(Dim+"provider: "+Reset+"%s\n", current)
 	fmt.Printf(Dim+"trigger:  "+Reset+"%s\n", trigger)
 	if detail != "" {
@@ -129,7 +129,7 @@ func PreFailoverWarning(current, next, trigger, nextStatus, detail string) {
 // RateLimitWarning prints a rate limit warning.
 func RateLimitWarning(provider, limitType, detail string) {
 	fmt.Println()
-	fmt.Println(Yellow + Bold + "[unblocked] Rate Limit Detected" + Reset)
+	fmt.Println(Yellow + Bold + "[tasuki] Rate Limit Detected" + Reset)
 	fmt.Printf(Dim+"provider: "+Reset+"%s\n", provider)
 	fmt.Printf(Dim+"trigger:  "+Reset+"%s\n", limitType)
 	if detail != "" {
@@ -141,7 +141,7 @@ func RateLimitWarning(provider, limitType, detail string) {
 
 // HandoffSaved prints notification of handoff save.
 func HandoffSaved(path string) {
-	fmt.Printf(Dim+"[unblocked] handoff saved:"+Reset+" %s\n", path)
+	fmt.Printf(Dim+"[tasuki] handoff saved:"+Reset+" %s\n", path)
 }
 
 // HandoffSummary prints a short summary of what is being passed forward.
@@ -149,7 +149,7 @@ func HandoffSummary(summary string) {
 	if strings.TrimSpace(summary) == "" {
 		return
 	}
-	fmt.Printf(Dim+"[unblocked] handoff summary:"+Reset+" %s\n", trimForDisplay(summary, 160))
+	fmt.Printf(Dim+"[tasuki] handoff summary:"+Reset+" %s\n", trimForDisplay(summary, 160))
 }
 
 // SessionInfo prints session summary.
@@ -182,9 +182,9 @@ func Done(provider string) {
 // AllProvidersExhausted prints a message when no providers are left.
 func AllProvidersExhausted() {
 	fmt.Println()
-	fmt.Println(Red + Bold + "[unblocked] all providers exhausted" + Reset)
+	fmt.Println(Red + Bold + "[tasuki] all providers exhausted" + Reset)
 	fmt.Println(Dim + "All configured providers have hit their limits." + Reset)
-	fmt.Println(Dim + "Session state saved in .unblocked/ — resume later." + Reset)
+	fmt.Println(Dim + "Session state saved in .tasuki/ — resume later." + Reset)
 }
 
 // RecoveredMessage reports that a previously rate-limited higher-priority

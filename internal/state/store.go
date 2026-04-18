@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 )
 
-const relayDir = ".unblocked"
+const relayDir = ".tasuki"
 
-// Store manages session state persistence in the .unblocked/ directory.
+// Store manages session state persistence in the .tasuki/ directory.
 type Store struct {
 	root string // project root directory
 }
@@ -38,7 +38,7 @@ func (s *Store) Init() error {
 	return nil
 }
 
-// SaveSession writes the session to .unblocked/session.json.
+// SaveSession writes the session to .tasuki/session.json.
 func (s *Store) SaveSession(sess *Session) error {
 	sess.Touch()
 	data, err := json.MarshalIndent(sess, "", "  ")
@@ -49,7 +49,7 @@ func (s *Store) SaveSession(sess *Session) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// LoadSession reads the session from .unblocked/session.json.
+// LoadSession reads the session from .tasuki/session.json.
 func (s *Store) LoadSession() (*Session, error) {
 	path := filepath.Join(s.Dir(), "session.json")
 	data, err := os.ReadFile(path)
@@ -70,8 +70,8 @@ func (s *Store) HasSession() bool {
 	return err == nil
 }
 
-// SaveHandoff writes the handoff markdown to .unblocked/handoff.md
-// and also archives it to .unblocked/history/.
+// SaveHandoff writes the handoff markdown to .tasuki/handoff.md
+// and also archives it to .tasuki/history/.
 func (s *Store) SaveHandoff(content string, count int) error {
 	// Current handoff
 	path := filepath.Join(s.Dir(), "handoff.md")
@@ -110,7 +110,7 @@ func (s *Store) DeleteProviderState() error {
 	return err
 }
 
-// LoadProviderState reads .unblocked/provider_state.json. When the file does
+// LoadProviderState reads .tasuki/provider_state.json. When the file does
 // not exist, an empty state is returned (not an error).
 func (s *Store) LoadProviderState() (*ProviderState, error) {
 	path := filepath.Join(s.Dir(), "provider_state.json")
@@ -131,7 +131,7 @@ func (s *Store) LoadProviderState() (*ProviderState, error) {
 	return ps, nil
 }
 
-// SaveProviderState writes the provider state to .unblocked/provider_state.json.
+// SaveProviderState writes the provider state to .tasuki/provider_state.json.
 func (s *Store) SaveProviderState(ps *ProviderState) error {
 	if ps == nil {
 		return nil

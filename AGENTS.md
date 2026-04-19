@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`cmd/tasuki/main.go` is the Cobra entrypoint for the CLI. Core logic lives under `internal/`: `adapter/` wraps provider CLIs and PTY handling, `orchestrator/` manages failover flow, `config/` loads and initializes YAML config, `state/` persists sessions/cooldowns, and `ui/` handles terminal output. Project-local runtime config is stored in `.tasuki/`; treat it as generated state, not source. The checked-in `tasuki` binary at the repo root is a build artifact and should not be edited directly.
+`cmd/tasuki/main.go` is the Cobra entrypoint for the CLI. Core logic lives under `internal/`: `adapter/` wraps provider CLIs and PTY handling, `orchestrator/` manages failover flow, `config/` loads and initializes YAML config, `state/` persists sessions/cooldowns, and `ui/` handles terminal output. Project-local runtime config is stored in `.tasuki/`; treat it as generated state, not source. Built binaries (e.g. `tasuki` at the repo root produced by `go build ./cmd/tasuki`) are gitignored; do not commit them.
 
 ## Build, Test, and Development Commands
 Use standard Go tooling from the repository root:

@@ -1,2 +1,13 @@
 .tasuki
 .codex
+
+# Build artifacts
+/tasuki
+*.exe
+*.test
+*.out
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

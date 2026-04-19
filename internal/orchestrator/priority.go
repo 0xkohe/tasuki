@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kooooohe/tasuki/internal/adapter"
-	"github.com/kooooohe/tasuki/internal/config"
-	"github.com/kooooohe/tasuki/internal/state"
+	"github.com/0xkohe/tasuki/internal/adapter"
+	"github.com/0xkohe/tasuki/internal/config"
+	"github.com/0xkohe/tasuki/internal/state"
 )
 
 // cycleFromRateLimitType extracts the canonical cycle label ("5h", "weekly",

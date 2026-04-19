@@ -8,9 +8,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/kooooohe/tasuki/internal/config"
-	"github.com/kooooohe/tasuki/internal/orchestrator"
-	"github.com/kooooohe/tasuki/internal/ui"
+	"github.com/0xkohe/tasuki/internal/config"
+	"github.com/0xkohe/tasuki/internal/orchestrator"
+	"github.com/0xkohe/tasuki/internal/ui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

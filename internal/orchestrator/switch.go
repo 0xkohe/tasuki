@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kooooohe/tasuki/internal/adapter"
-	"github.com/kooooohe/tasuki/internal/config"
-	"github.com/kooooohe/tasuki/internal/state"
-	"github.com/kooooohe/tasuki/internal/ui"
+	"github.com/0xkohe/tasuki/internal/adapter"
+	"github.com/0xkohe/tasuki/internal/config"
+	"github.com/0xkohe/tasuki/internal/state"
+	"github.com/0xkohe/tasuki/internal/ui"
 )
 
 // switchProvider handles the transition from the current provider to the next one.

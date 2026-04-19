@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/kooooohe/tasuki/internal/state"
+	"github.com/0xkohe/tasuki/internal/state"
 )
 
 const handoffTemplate = `# Handoff

@@ -1,4 +1,4 @@
-module github.com/kooooohe/tasuki
+module github.com/0xkohe/tasuki
 
 go 1.26.1
 

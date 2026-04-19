@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kooooohe/tasuki/internal/state"
+	"github.com/0xkohe/tasuki/internal/state"
 )
 
 func TestGenerateResumePromptIncludesLastOutput(t *testing.T) {

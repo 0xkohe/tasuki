@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kooooohe/tasuki/internal/config"
-	"github.com/kooooohe/tasuki/internal/state"
+	"github.com/0xkohe/tasuki/internal/config"
+	"github.com/0xkohe/tasuki/internal/state"
 )
 
 func TestEnsureSessionDoesNotResumeByDefault(t *testing.T) {

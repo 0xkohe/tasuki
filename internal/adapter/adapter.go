@@ -51,9 +51,13 @@ type PassthroughSnapshot struct {
 
 // Options controls provider-specific runtime behavior.
 type Options struct {
-	SwitchThreshold    int
-	WarnThreshold      int
-	PreserveScrollback bool
+	SwitchThreshold int
+	WarnThreshold   int
+	// WeeklySwitchThreshold applies to the weekly (7-day) rate-limit window.
+	// 0 disables weekly monitoring — detectors skip "7d" / "weekly" signals.
+	WeeklySwitchThreshold int
+	WeeklyWarnThreshold   int
+	PreserveScrollback    bool
 	// YoloMode enables each provider's permission/sandbox bypass flag.
 	YoloMode bool
 }

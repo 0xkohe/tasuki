@@ -117,18 +117,22 @@ Example config with every supported key:
 
 ```yaml
 # Global defaults applied when a provider doesn't override them.
-switch_threshold: 95       # percent of rate-limit budget that triggers failover
-warn_threshold: 80         # percent that emits a pre-switch warning
-preserve_scrollback: false # use the terminal's main screen instead of alt-screen
-yolo: false                # forward each CLI's permission-bypass flag
+switch_threshold: 95         # percent of 5h rate-limit budget that triggers failover
+warn_threshold: 80           # percent that emits a pre-switch warning (5h window)
+weekly_switch_threshold: 0   # weekly (7d) failover threshold; 0 disables weekly monitoring (default)
+weekly_warn_threshold: 0     # weekly warn threshold; 0 disables weekly warnings
+preserve_scrollback: false   # use the terminal's main screen instead of alt-screen
+yolo: false                  # forward each CLI's permission-bypass flag
 
 providers:
   - name: claude
     enabled: true
-    reset_cycle: 5h        # "5h", "weekly", or "monthly"
-    priority: 1            # optional; lower value = higher priority
-    switch_threshold: 90   # optional per-provider override
-    warn_threshold: 75     # optional per-provider override
+    reset_cycle: 5h               # "5h", "weekly", or "monthly"
+    priority: 1                   # optional; lower value = higher priority
+    switch_threshold: 90          # optional per-provider override (5h window)
+    warn_threshold: 75            # optional per-provider override (5h window)
+    weekly_switch_threshold: 90   # optional per-provider override for the weekly window; 0 disables
+    weekly_warn_threshold: 75     # optional per-provider weekly warn override
     preserve_scrollback: true
   - name: codex
     enabled: true
@@ -147,12 +151,14 @@ Provider selection order is resolved as:
 ## How failover works
 
 Each provider runs behind an adapter that watches the CLI's output stream
-for rate-limit and usage signals. When a provider crosses its
-`switch_threshold`, the orchestrator puts it in cooldown and hands the
-session to the next-priority provider that is still available. Session
-state, provider history, and a human-readable handoff summary are persisted
-under `.tasuki/` so the next CLI can continue the task without losing
-context.
+for rate-limit and usage signals. `switch_threshold` / `warn_threshold`
+apply to the 5-hour window (the one most users hit during a session); the
+weekly/7-day window is only monitored when `weekly_switch_threshold` is set
+above 0. When a provider crosses either threshold, the orchestrator puts it
+in cooldown and hands the session to the next-priority provider that is
+still available. Session state, provider history, and a human-readable
+handoff summary are persisted under `.tasuki/` so the next CLI can continue
+the task without losing context.
 
 ## Project layout
 

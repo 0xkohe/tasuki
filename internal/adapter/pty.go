@@ -59,39 +59,63 @@ const defaultSwitchThreshold = 95
 
 // outputMonitor reads from src, writes to dst (pass-through), and scans for rate limit patterns.
 type outputMonitor struct {
-	src           io.Reader
-	dst           io.Writer
-	events        chan Event
-	capture       *passthroughCapture
-	provider      string
-	threshold     int
-	warnThreshold int
-	mu            sync.Mutex
-	buf           strings.Builder // rolling window for pattern matching
-	history       strings.Builder // recent plain-text output for handoff
-	triggered     bool            // switch threshold — fire once
-	warned        bool            // warn threshold — fire once
+	src             io.Reader
+	dst             io.Writer
+	events          chan Event
+	capture         *passthroughCapture
+	provider        string
+	threshold       int // 5h / generic switch threshold
+	warnThreshold   int // 5h / generic warn threshold
+	weeklyThreshold int // weekly switch threshold; 0 disables weekly monitoring
+	weeklyWarn      int // weekly warn threshold; 0 disables weekly warning
+	mu              sync.Mutex
+	buf             strings.Builder // rolling window for pattern matching
+	history         strings.Builder // recent plain-text output for handoff
+	triggered       bool            // switch threshold — fire once
+	warned          bool            // warn threshold — fire once
 }
 
 func newOutputMonitor(src io.Reader, dst io.Writer, events chan Event, capture *passthroughCapture, provider string, threshold int) *outputMonitor {
-	return newOutputMonitorWithWarn(src, dst, events, capture, provider, threshold, 0)
+	return newOutputMonitorWithOptions(src, dst, events, capture, provider, monitorThresholds{Switch: threshold})
 }
 
 func newOutputMonitorWithWarn(src io.Reader, dst io.Writer, events chan Event, capture *passthroughCapture, provider string, threshold, warn int) *outputMonitor {
-	if threshold <= 0 || threshold > 100 {
-		threshold = defaultSwitchThreshold
+	return newOutputMonitorWithOptions(src, dst, events, capture, provider, monitorThresholds{Switch: threshold, Warn: warn})
+}
+
+// monitorThresholds bundles the per-cycle thresholds the monitor cares about.
+// Weekly entries at 0 disable weekly monitoring for the claude/codex status
+// lines that distinguish 5h and weekly windows.
+type monitorThresholds struct {
+	Switch       int
+	Warn         int
+	WeeklySwitch int
+	WeeklyWarn   int
+}
+
+func newOutputMonitorWithOptions(src io.Reader, dst io.Writer, events chan Event, capture *passthroughCapture, provider string, t monitorThresholds) *outputMonitor {
+	if t.Switch <= 0 || t.Switch > 100 {
+		t.Switch = defaultSwitchThreshold
 	}
-	if warn < 0 || warn >= threshold {
-		warn = 0
+	if t.Warn < 0 || t.Warn >= t.Switch {
+		t.Warn = 0
+	}
+	if t.WeeklySwitch < 0 || t.WeeklySwitch > 100 {
+		t.WeeklySwitch = 0
+	}
+	if t.WeeklyWarn < 0 || t.WeeklySwitch <= 0 || t.WeeklyWarn >= t.WeeklySwitch {
+		t.WeeklyWarn = 0
 	}
 	return &outputMonitor{
-		src:           src,
-		dst:           dst,
-		events:        events,
-		capture:       capture,
-		provider:      provider,
-		threshold:     threshold,
-		warnThreshold: warn,
+		src:             src,
+		dst:             dst,
+		events:          events,
+		capture:         capture,
+		provider:        provider,
+		threshold:       t.Switch,
+		warnThreshold:   t.Warn,
+		weeklyThreshold: t.WeeklySwitch,
+		weeklyWarn:      t.WeeklyWarn,
 	}
 }
 
@@ -145,20 +169,28 @@ func (m *outputMonitor) checkForRateLimit(data []byte) {
 	text := m.buf.String()
 	if len(text) > 2048 {
 		text = text[len(text)-2048:]
+		// The cut point can land mid-token (e.g. between "9" and "0" of
+		// "90% left"), leaving a leading fragment that would otherwise be
+		// matched as a standalone value ("0% left" → remaining 0 → false
+		// positive rate-limit trigger). Drop everything up to the first
+		// separator so partial tokens can't anchor a match.
+		if i := strings.IndexAny(text, " \t\r\n·|"); i > 0 {
+			text = text[i:]
+		}
 		m.buf.Reset()
 		m.buf.WriteString(text)
 	}
 
 	lower := strings.ToLower(text)
 
-	if evt := detectRateLimit(lower, m.provider, m.threshold); evt != nil {
+	if evt := detectRateLimit(lower, m.provider, m.threshold, m.weeklyThreshold); evt != nil {
 		m.triggered = true
 		m.events <- *evt
 		return
 	}
 
-	if !m.warned && m.warnThreshold > 0 {
-		if evt := detectRateLimitWarning(lower, m.provider, m.warnThreshold, m.threshold); evt != nil {
+	if !m.warned && (m.warnThreshold > 0 || m.weeklyWarn > 0) {
+		if evt := detectRateLimitWarning(lower, m.provider, m.warnThreshold, m.threshold, m.weeklyWarn, m.weeklyThreshold); evt != nil {
 			m.warned = true
 			// Reset the scan buffer so the first-match regex in detectRateLimit
 			// isn't anchored to the stale warn-level percentage when the switch
@@ -169,9 +201,13 @@ func (m *outputMonitor) checkForRateLimit(data []byte) {
 	}
 }
 
-func detectRateLimit(lower string, provider string, threshold int) *Event {
+func detectRateLimit(lower string, provider string, threshold, weeklyThreshold int) *Event {
 	if threshold <= 0 || threshold > 100 {
 		threshold = defaultSwitchThreshold
+	}
+	// weeklyThreshold of 0 (or negative) means weekly monitoring is disabled.
+	if weeklyThreshold < 0 || weeklyThreshold > 100 {
+		weeklyThreshold = 0
 	}
 
 	switch provider {
@@ -190,14 +226,16 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 					},
 				}
 			}
-			if pct, ok := parseUsagePercent(matches[2]); ok && pct >= threshold {
-				return &Event{
-					Type:    EventRateLimit,
-					Content: matches[0],
-					RateLimit: &RateLimitInfo{
-						Type:  "seven_day_" + matches[2] + "%",
-						Cycle: "weekly",
-					},
+			if weeklyThreshold > 0 {
+				if pct, ok := parseUsagePercent(matches[2]); ok && pct >= weeklyThreshold {
+					return &Event{
+						Type:    EventRateLimit,
+						Content: matches[0],
+						RateLimit: &RateLimitInfo{
+							Type:  "seven_day_" + matches[2] + "%",
+							Cycle: "weekly",
+						},
+					}
 				}
 			}
 		}
@@ -239,10 +277,11 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 					continue
 				}
 				remaining, err := strconv.Atoi(match[2])
-				used := 100 - remaining
-				if err != nil || used < threshold {
+				if err != nil {
 					continue
 				}
+				used := 100 - remaining
+				effectiveT := threshold
 				typeName := "usage_" + match[2] + "%"
 				cycle := ""
 				if match[1] == "5h" {
@@ -250,8 +289,15 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 					cycle = "5h"
 				}
 				if match[1] == "weekly" {
+					if weeklyThreshold <= 0 {
+						continue
+					}
+					effectiveT = weeklyThreshold
 					typeName = "weekly_" + match[2] + "%"
 					cycle = "weekly"
+				}
+				if used < effectiveT {
+					continue
 				}
 				return &Event{
 					Type:    EventRateLimit,
@@ -267,6 +313,8 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 		// Older Codex builds show remaining percentage. Convert that to used%
 		// so the configured threshold keeps the same meaning as other providers:
 		// threshold=80 means "switch after 80% used", i.e. at 20% left.
+		// No cycle metadata on this signal — always compared against the 5h
+		// threshold (weekly monitoring opt-in doesn't apply here).
 		if matches := codexRemainingRegex.FindStringSubmatch(lower); len(matches) > 1 {
 			remaining, err := strconv.Atoi(matches[1])
 			used := 100 - remaining
@@ -281,21 +329,30 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 			}
 		}
 		if matches := codexUsedRegex.FindStringSubmatch(lower); len(matches) > 1 {
-			used, err := strconv.Atoi(matches[1])
-			if err == nil && used >= threshold {
+			if used, err := strconv.Atoi(matches[1]); err == nil {
 				cycle := ""
 				if strings.Contains(matches[0], "weekly") {
 					cycle = "weekly"
 				} else if strings.Contains(matches[0], "5h") || strings.Contains(matches[0], "five-hour") {
 					cycle = "5h"
 				}
-				return &Event{
-					Type:    EventRateLimit,
-					Content: matches[0],
-					RateLimit: &RateLimitInfo{
-						Type:  "usage_" + matches[1] + "%",
-						Cycle: cycle,
-					},
+				effectiveT := threshold
+				eligible := true
+				if cycle == "weekly" {
+					if weeklyThreshold <= 0 {
+						eligible = false
+					}
+					effectiveT = weeklyThreshold
+				}
+				if eligible && used >= effectiveT {
+					return &Event{
+						Type:    EventRateLimit,
+						Content: matches[0],
+						RateLimit: &RateLimitInfo{
+							Type:  "usage_" + matches[1] + "%",
+							Cycle: cycle,
+						},
+					}
 				}
 			}
 		}
@@ -351,17 +408,28 @@ func detectRateLimit(lower string, provider string, threshold int) *Event {
 // but fires when usage sits between warn and switch thresholds. Hard-limit
 // phrases (e.g. "rate limit reached") are ignored here — those belong to the
 // switch stage since there is no "warning" when the limit is already hit.
-func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
-	if warn <= 0 || warn >= switchT {
+//
+// warn/switchT cover the 5h / generic window; weeklyWarn/weeklySwitch cover
+// the weekly window. A weekly threshold of 0 disables weekly warnings.
+func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, weeklySwitch int) *Event {
+	fiveHourEligible := warn > 0 && warn < switchT
+	weeklyEligible := weeklyWarn > 0 && weeklySwitch > 0 && weeklyWarn < weeklySwitch
+	if !fiveHourEligible && !weeklyEligible {
 		return nil
 	}
 
-	inRange := func(pct int) bool { return pct >= warn && pct < switchT }
+	inRange := func(pct, w, s int) bool { return pct >= w && pct < s }
+	fiveHourInRange := func(pct int) bool {
+		return fiveHourEligible && inRange(pct, warn, switchT)
+	}
+	weeklyInRange := func(pct int) bool {
+		return weeklyEligible && inRange(pct, weeklyWarn, weeklySwitch)
+	}
 
 	switch provider {
 	case "claude":
 		if matches := lastSubmatch(structuredRateLimitRegex, lower); len(matches) > 2 {
-			if pct, ok := parseUsagePercent(matches[1]); ok && inRange(pct) {
+			if pct, ok := parseUsagePercent(matches[1]); ok && fiveHourInRange(pct) {
 				return &Event{
 					Type:    EventRateLimitWarning,
 					Content: matches[0],
@@ -371,7 +439,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 					},
 				}
 			}
-			if pct, ok := parseUsagePercent(matches[2]); ok && inRange(pct) {
+			if pct, ok := parseUsagePercent(matches[2]); ok && weeklyInRange(pct) {
 				return &Event{
 					Type:    EventRateLimitWarning,
 					Content: matches[0],
@@ -383,7 +451,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 			}
 		}
 		if matches := lastSubmatch(usagePercentRegex, lower); len(matches) > 1 {
-			if pct, err := strconv.Atoi(matches[1]); err == nil && inRange(pct) {
+			if pct, err := strconv.Atoi(matches[1]); err == nil && fiveHourInRange(pct) {
 				return &Event{
 					Type:    EventRateLimitWarning,
 					Content: matches[0],
@@ -394,14 +462,16 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 				}
 			}
 		}
-		if match := usageWarningRegex.FindString(lower); match != "" {
-			return &Event{
-				Type:    EventRateLimitWarning,
-				Content: match,
-				RateLimit: &RateLimitInfo{
-					Type:  "usage_warning",
-					Cycle: "5h",
-				},
+		if fiveHourEligible {
+			if match := usageWarningRegex.FindString(lower); match != "" {
+				return &Event{
+					Type:    EventRateLimitWarning,
+					Content: match,
+					RateLimit: &RateLimitInfo{
+						Type:  "usage_warning",
+						Cycle: "5h",
+					},
+				}
 			}
 		}
 
@@ -412,19 +482,24 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 					continue
 				}
 				remaining, err := strconv.Atoi(match[2])
-				used := 100 - remaining
-				if err != nil || !inRange(used) {
+				if err != nil {
 					continue
 				}
-				typeName := "usage_" + match[2] + "%"
+				used := 100 - remaining
 				cycle := ""
+				typeName := "usage_" + match[2] + "%"
+				var eligible bool
 				if match[1] == "5h" {
-					typeName = "five_hour_" + match[2] + "%"
 					cycle = "5h"
-				}
-				if match[1] == "weekly" {
-					typeName = "weekly_" + match[2] + "%"
+					typeName = "five_hour_" + match[2] + "%"
+					eligible = fiveHourInRange(used)
+				} else if match[1] == "weekly" {
 					cycle = "weekly"
+					typeName = "weekly_" + match[2] + "%"
+					eligible = weeklyInRange(used)
+				}
+				if !eligible {
+					continue
 				}
 				return &Event{
 					Type:    EventRateLimitWarning,
@@ -437,25 +512,33 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 			}
 		}
 		if matches := codexUsedRegex.FindStringSubmatch(lower); len(matches) > 1 {
-			if used, err := strconv.Atoi(matches[1]); err == nil && inRange(used) {
+			if used, err := strconv.Atoi(matches[1]); err == nil {
 				cycle := ""
 				if strings.Contains(matches[0], "weekly") {
 					cycle = "weekly"
 				} else if strings.Contains(matches[0], "5h") || strings.Contains(matches[0], "five-hour") {
 					cycle = "5h"
 				}
-				return &Event{
-					Type:    EventRateLimitWarning,
-					Content: matches[0],
-					RateLimit: &RateLimitInfo{
-						Type:  "usage_" + matches[1] + "%",
-						Cycle: cycle,
-					},
+				eligible := false
+				if cycle == "weekly" {
+					eligible = weeklyInRange(used)
+				} else {
+					eligible = fiveHourInRange(used)
+				}
+				if eligible {
+					return &Event{
+						Type:    EventRateLimitWarning,
+						Content: matches[0],
+						RateLimit: &RateLimitInfo{
+							Type:  "usage_" + matches[1] + "%",
+							Cycle: cycle,
+						},
+					}
 				}
 			}
 		}
 		if matches := codexRemainingRegex.FindStringSubmatch(lower); len(matches) > 1 {
-			if remaining, err := strconv.Atoi(matches[1]); err == nil && inRange(100-remaining) {
+			if remaining, err := strconv.Atoi(matches[1]); err == nil && fiveHourInRange(100-remaining) {
 				return &Event{
 					Type:    EventRateLimitWarning,
 					Content: matches[0],
@@ -472,7 +555,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 			if value == "" {
 				value = matches[2]
 			}
-			if used, err := strconv.Atoi(value); err == nil && inRange(used) {
+			if used, err := strconv.Atoi(value); err == nil && fiveHourInRange(used) {
 				return &Event{
 					Type:    EventRateLimitWarning,
 					Content: matches[0],
@@ -483,7 +566,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT int) *Event {
 			}
 		}
 		if matches := copilotCompactionRegex.FindStringSubmatch(lower); len(matches) > 1 {
-			if used, err := strconv.Atoi(matches[1]); err == nil && inRange(used) {
+			if used, err := strconv.Atoi(matches[1]); err == nil && fiveHourInRange(used) {
 				return &Event{
 					Type:    EventRateLimitWarning,
 					Content: matches[0],

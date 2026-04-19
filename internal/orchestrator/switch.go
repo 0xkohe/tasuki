@@ -226,10 +226,12 @@ func initProviders(cfg *config.Config) []adapter.Provider {
 	for _, name := range cfg.ProviderNames() {
 		if factory, ok := registry[name]; ok {
 			p := factory(adapter.Options{
-				SwitchThreshold:    cfg.ProviderThreshold(name),
-				WarnThreshold:      cfg.ProviderWarnThreshold(name),
-				PreserveScrollback: cfg.ProviderPreserveScrollback(name),
-				YoloMode:           cfg.Yolo,
+				SwitchThreshold:       cfg.ProviderThreshold(name),
+				WarnThreshold:         cfg.ProviderWarnThreshold(name),
+				WeeklySwitchThreshold: cfg.ProviderWeeklyThreshold(name),
+				WeeklyWarnThreshold:   cfg.ProviderWeeklyWarnThreshold(name),
+				PreserveScrollback:    cfg.ProviderPreserveScrollback(name),
+				YoloMode:              cfg.Yolo,
 			})
 			if p.IsAvailable() {
 				providers = append(providers, p)

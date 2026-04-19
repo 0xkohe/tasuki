@@ -14,7 +14,13 @@ type ProviderConfig struct {
 	Enabled            bool   `yaml:"enabled"`
 	SwitchThreshold    int    `yaml:"switch_threshold,omitempty"`
 	WarnThreshold      int    `yaml:"warn_threshold,omitempty"`
-	PreserveScrollback *bool  `yaml:"preserve_scrollback,omitempty"`
+	// WeeklySwitchThreshold configures the switch threshold for the weekly
+	// (7-day) rate-limit window. 0 disables weekly monitoring for this
+	// provider, falling back to the top-level value.
+	WeeklySwitchThreshold int `yaml:"weekly_switch_threshold,omitempty"`
+	// WeeklyWarnThreshold mirrors WarnThreshold for the weekly window.
+	WeeklyWarnThreshold int   `yaml:"weekly_warn_threshold,omitempty"`
+	PreserveScrollback  *bool `yaml:"preserve_scrollback,omitempty"`
 	// ResetCycle is the subscription reset window for this provider.
 	// Accepted values: "5h", "weekly", "monthly". Empty means unknown.
 	ResetCycle string `yaml:"reset_cycle,omitempty"`
@@ -26,9 +32,15 @@ type ProviderConfig struct {
 
 // Config is the top-level relay configuration.
 type Config struct {
-	SwitchThreshold    int  `yaml:"switch_threshold,omitempty"`
-	WarnThreshold      int  `yaml:"warn_threshold,omitempty"`
-	PreserveScrollback bool `yaml:"preserve_scrollback,omitempty"`
+	SwitchThreshold int `yaml:"switch_threshold,omitempty"`
+	WarnThreshold   int `yaml:"warn_threshold,omitempty"`
+	// WeeklySwitchThreshold applies to the weekly (7-day) rate-limit window.
+	// 0 disables weekly monitoring — detectors ignore "7d" / "weekly" signals.
+	// Per-provider overrides (ProviderConfig.WeeklySwitchThreshold) take
+	// precedence when set.
+	WeeklySwitchThreshold int  `yaml:"weekly_switch_threshold,omitempty"`
+	WeeklyWarnThreshold   int  `yaml:"weekly_warn_threshold,omitempty"`
+	PreserveScrollback    bool `yaml:"preserve_scrollback,omitempty"`
 	// Yolo enables each provider's permission/sandbox bypass flag when true.
 	Yolo      bool             `yaml:"yolo,omitempty"`
 	Providers []ProviderConfig `yaml:"providers"`
@@ -160,6 +172,62 @@ func (c *Config) ProviderWarnThreshold(name string) int {
 	return derived
 }
 
+// ProviderWeeklyThreshold returns the effective weekly-window switch
+// threshold for the provider. Returns 0 when weekly monitoring is disabled
+// (i.e. neither the provider nor the top-level config sets a positive value).
+func (c *Config) ProviderWeeklyThreshold(name string) int {
+	for _, p := range c.Providers {
+		if p.Name == name {
+			if p.WeeklySwitchThreshold > 0 {
+				return p.WeeklySwitchThreshold
+			}
+			break
+		}
+	}
+	return c.WeeklySwitchThreshold
+}
+
+// ProviderWeeklyWarnThreshold returns the effective weekly warn threshold.
+// When weekly monitoring is disabled (ProviderWeeklyThreshold == 0) this also
+// returns 0. Otherwise it mirrors ProviderWarnThreshold's fallback logic
+// against the weekly switch threshold.
+func (c *Config) ProviderWeeklyWarnThreshold(name string) int {
+	switchT := c.ProviderWeeklyThreshold(name)
+	if switchT <= 0 {
+		return 0
+	}
+
+	configured := 0
+	for _, p := range c.Providers {
+		if p.Name == name {
+			configured = p.WeeklyWarnThreshold
+			break
+		}
+	}
+	if configured <= 0 {
+		configured = c.WeeklyWarnThreshold
+	}
+
+	if configured > 0 {
+		if configured >= switchT {
+			configured = switchT - 1
+		}
+		if configured < 1 {
+			return 0
+		}
+		return configured
+	}
+
+	derived := switchT - 15
+	if derived < 50 {
+		derived = 50
+	}
+	if derived >= switchT {
+		return 0
+	}
+	return derived
+}
+
 // ProviderPreserveScrollback returns whether inline/no-alt-screen mode should be used.
 func (c *Config) ProviderPreserveScrollback(name string) bool {
 	for _, p := range c.Providers {
@@ -218,6 +286,12 @@ func (c *Config) merge(overlay *Config) {
 	if overlay.WarnThreshold > 0 {
 		c.WarnThreshold = overlay.WarnThreshold
 	}
+	if overlay.WeeklySwitchThreshold > 0 {
+		c.WeeklySwitchThreshold = overlay.WeeklySwitchThreshold
+	}
+	if overlay.WeeklyWarnThreshold > 0 {
+		c.WeeklyWarnThreshold = overlay.WeeklyWarnThreshold
+	}
 	if overlay.Yolo {
 		c.Yolo = true
 	}
@@ -233,12 +307,24 @@ func (c *Config) normalize() {
 	if c.WarnThreshold < 0 || c.WarnThreshold > 100 {
 		c.WarnThreshold = 0
 	}
+	if c.WeeklySwitchThreshold < 0 || c.WeeklySwitchThreshold > 100 {
+		c.WeeklySwitchThreshold = 0
+	}
+	if c.WeeklyWarnThreshold < 0 || c.WeeklyWarnThreshold > 100 {
+		c.WeeklyWarnThreshold = 0
+	}
 	for i := range c.Providers {
 		if c.Providers[i].SwitchThreshold < 0 || c.Providers[i].SwitchThreshold > 100 {
 			c.Providers[i].SwitchThreshold = 0
 		}
 		if c.Providers[i].WarnThreshold < 0 || c.Providers[i].WarnThreshold > 100 {
 			c.Providers[i].WarnThreshold = 0
+		}
+		if c.Providers[i].WeeklySwitchThreshold < 0 || c.Providers[i].WeeklySwitchThreshold > 100 {
+			c.Providers[i].WeeklySwitchThreshold = 0
+		}
+		if c.Providers[i].WeeklyWarnThreshold < 0 || c.Providers[i].WeeklyWarnThreshold > 100 {
+			c.Providers[i].WeeklyWarnThreshold = 0
 		}
 		switch c.Providers[i].ResetCycle {
 		case "", "5h", "weekly", "monthly":

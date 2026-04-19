@@ -135,7 +135,12 @@ func (c *Claude) RunInteractive(ctx context.Context, workDir string, initialProm
 	}
 
 	// Monitor output for rate limit patterns
-	monitor := newOutputMonitorWithWarn(ptmx, os.Stdout, events, capture, c.Name(), c.opts.SwitchThreshold, c.opts.WarnThreshold)
+	monitor := newOutputMonitorWithOptions(ptmx, os.Stdout, events, capture, c.Name(), monitorThresholds{
+		Switch:       c.opts.SwitchThreshold,
+		Warn:         c.opts.WarnThreshold,
+		WeeklySwitch: c.opts.WeeklySwitchThreshold,
+		WeeklyWarn:   c.opts.WeeklyWarnThreshold,
+	})
 	go monitor.Run()
 
 	// Wait for process exit

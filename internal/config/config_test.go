@@ -65,6 +65,52 @@ func TestProviderWarnThresholdClampedBelowSwitch(t *testing.T) {
 	}
 }
 
+func TestProviderWeeklyThresholdDisabledByDefault(t *testing.T) {
+	cfg := &Config{
+		SwitchThreshold: 25,
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true},
+		},
+	}
+	if got := cfg.ProviderWeeklyThreshold("claude"); got != 0 {
+		t.Fatalf("ProviderWeeklyThreshold(claude) = %d, want 0 (disabled)", got)
+	}
+	if got := cfg.ProviderWeeklyWarnThreshold("claude"); got != 0 {
+		t.Fatalf("ProviderWeeklyWarnThreshold(claude) = %d, want 0 (disabled)", got)
+	}
+}
+
+func TestProviderWeeklyThresholdUsesProviderOverride(t *testing.T) {
+	cfg := &Config{
+		SwitchThreshold:       25,
+		WeeklySwitchThreshold: 80,
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true, WeeklySwitchThreshold: 70},
+			{Name: "codex", Enabled: true},
+		},
+	}
+	if got := cfg.ProviderWeeklyThreshold("claude"); got != 70 {
+		t.Fatalf("ProviderWeeklyThreshold(claude) = %d, want 70", got)
+	}
+	if got := cfg.ProviderWeeklyThreshold("codex"); got != 80 {
+		t.Fatalf("ProviderWeeklyThreshold(codex) = %d, want 80 (top-level)", got)
+	}
+}
+
+func TestProviderWeeklyWarnThresholdDerivedFromSwitch(t *testing.T) {
+	cfg := &Config{
+		SwitchThreshold:       25,
+		WeeklySwitchThreshold: 95,
+		Providers: []ProviderConfig{
+			{Name: "claude", Enabled: true},
+		},
+	}
+	// switch 95 − 15 = 80.
+	if got := cfg.ProviderWeeklyWarnThreshold("claude"); got != 80 {
+		t.Fatalf("ProviderWeeklyWarnThreshold(claude) = %d, want 80", got)
+	}
+}
+
 func TestProviderPreserveScrollbackUsesProviderOverride(t *testing.T) {
 	trueValue := true
 	falseValue := false

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 )
@@ -41,12 +43,18 @@ var codexRemainingRegex = regexp.MustCompile(`(?:^|[\s|·])(\d+)% left(?:\b|$)`)
 // codexUsedRegex matches Codex warnings like "used 75% of the weekly usage already".
 var codexUsedRegex = regexp.MustCompile(`used (\d+)% of (?:the )?(?:weekly |5h |five-hour )?usage`)
 
-// codexStatusRegex matches the full Codex status line, e.g.
-// "5h 48% · weekly 74%". Requiring both windows in a canonical arrangement
-// keeps a partially corrupted redraw in the scan buffer from false-firing:
-// intermittent ANSI / chunk-boundary hiccups can drop characters
-// ("5h 9% · wekly 83%") and a looser pattern happily matches the fragment.
-var codexStatusRegex = regexp.MustCompile(`(?i)5h\s+(\d+)%\s*[·|]\s*weekly\s+(\d+)%`)
+// codexStatusRegex matches the full Codex status line. The canonical form
+// sits at the bottom of the UI as "… · 5h N% · weekly N%", so we require a
+// leading separator ("·" or "|") — or start of buffer — immediately before
+// "5h". Without that anchor, source-code, diff output, or chat transcript
+// that contains the same textual pattern (e.g. a test fixture literal like
+// `"5h 15% · weekly 83%"` surfaced when the provider edits this file) would
+// otherwise match and fire a spurious failover.
+//
+// Requiring both windows in a single canonical arrangement also keeps a
+// partially corrupted redraw from false-firing when ANSI / chunk-boundary
+// hiccups drop characters ("5h 9% · wekly 83%").
+var codexStatusRegex = regexp.MustCompile(`(?i)(?:^|[·|])\s*5h\s+(\d+)%\s*[·|]\s*weekly\s+(\d+)%`)
 
 // usageWarningRegex matches Claude Code warnings such as:
 // "Approaching usage limit · resets at 10am"
@@ -64,6 +72,46 @@ var copilotCompactionRegex = regexp.MustCompile(`approach(?:es|ing)? (\d+)% of t
 
 const defaultSwitchThreshold = 95
 
+const (
+	defaultScreenRows     = 24
+	defaultScreenCols     = 80
+	statusStabilityCount  = 2
+	statusStabilityWindow = 200 * time.Millisecond
+	screenRowsGeneral     = 8
+	screenRowsCodexStatus = 3
+)
+
+type pendingDetection struct {
+	key       string
+	firstSeen time.Time
+	seenCount int
+}
+
+type terminalScreen struct {
+	rows int
+	cols int
+
+	cells [][]rune
+	row   int
+	col   int
+
+	savedRow int
+	savedCol int
+
+	escState screenEscapeState
+	csiBuf   []byte
+	oscEsc   bool
+}
+
+type screenEscapeState int
+
+const (
+	screenStateText screenEscapeState = iota
+	screenStateEsc
+	screenStateCSI
+	screenStateOSC
+)
+
 // outputMonitor reads from src, writes to dst (pass-through), and scans for rate limit patterns.
 type outputMonitor struct {
 	src             io.Reader
@@ -78,8 +126,306 @@ type outputMonitor struct {
 	mu              sync.Mutex
 	buf             strings.Builder // rolling window for pattern matching
 	history         strings.Builder // recent plain-text output for handoff
-	triggered       bool            // switch threshold — fire once
-	warned          bool            // warn threshold — fire once
+	screen          *terminalScreen
+	triggered       bool // switch threshold — fire once
+	warned          bool // warn threshold — fire once
+	pendingSwitch   *pendingDetection
+	pendingWarn     *pendingDetection
+}
+
+func newTerminalScreen(rows, cols int) *terminalScreen {
+	if rows <= 0 {
+		rows = defaultScreenRows
+	}
+	if cols <= 0 {
+		cols = defaultScreenCols
+	}
+	s := &terminalScreen{}
+	s.resize(rows, cols)
+	return s
+}
+
+func (s *terminalScreen) resize(rows, cols int) {
+	if rows <= 0 {
+		rows = defaultScreenRows
+	}
+	if cols <= 0 {
+		cols = defaultScreenCols
+	}
+
+	oldRows := s.rows
+	oldCols := s.cols
+	oldCells := s.cells
+
+	s.rows = rows
+	s.cols = cols
+	s.cells = make([][]rune, rows)
+	for i := range s.cells {
+		s.cells[i] = make([]rune, cols)
+		for j := range s.cells[i] {
+			s.cells[i][j] = ' '
+		}
+	}
+
+	if oldRows == 0 || oldCols == 0 {
+		s.row = 0
+		s.col = 0
+		return
+	}
+
+	copyRows := minInt(oldRows, rows)
+	rowOffsetOld := maxInt(0, oldRows-copyRows)
+	rowOffsetNew := maxInt(0, rows-copyRows)
+	for r := 0; r < copyRows; r++ {
+		copyCols := minInt(oldCols, cols)
+		copy(s.cells[rowOffsetNew+r][:copyCols], oldCells[rowOffsetOld+r][:copyCols])
+	}
+
+	if s.row >= rows {
+		s.row = rows - 1
+	}
+	if s.col >= cols {
+		s.col = cols - 1
+	}
+	if s.savedRow >= rows {
+		s.savedRow = rows - 1
+	}
+	if s.savedCol >= cols {
+		s.savedCol = cols - 1
+	}
+}
+
+func (s *terminalScreen) apply(data []byte) {
+	for i := 0; i < len(data); {
+		b := data[i]
+		switch s.escState {
+		case screenStateText:
+			switch b {
+			case 0x1b:
+				s.escState = screenStateEsc
+				i++
+				continue
+			case '\r':
+				s.col = 0
+				i++
+				continue
+			case '\n':
+				s.lineFeed()
+				i++
+				continue
+			case '\b':
+				if s.col > 0 {
+					s.col--
+				}
+				i++
+				continue
+			case '\t':
+				next := ((s.col / 8) + 1) * 8
+				if next >= s.cols {
+					s.col = s.cols - 1
+				} else {
+					s.col = next
+				}
+				i++
+				continue
+			}
+			if b < 0x20 || b == 0x7f {
+				i++
+				continue
+			}
+			r, size := utf8.DecodeRune(data[i:])
+			if r == utf8.RuneError && size == 1 {
+				r = rune(b)
+			}
+			s.writeRune(r)
+			i += size
+		case screenStateEsc:
+			switch b {
+			case '[':
+				s.escState = screenStateCSI
+				s.csiBuf = s.csiBuf[:0]
+			case ']':
+				s.escState = screenStateOSC
+				s.oscEsc = false
+			case '7':
+				s.savedRow = s.row
+				s.savedCol = s.col
+				s.escState = screenStateText
+			case '8':
+				s.row = clampInt(s.savedRow, 0, s.rows-1)
+				s.col = clampInt(s.savedCol, 0, s.cols-1)
+				s.escState = screenStateText
+			default:
+				s.escState = screenStateText
+			}
+			i++
+		case screenStateCSI:
+			s.csiBuf = append(s.csiBuf, b)
+			i++
+			if b >= 0x40 && b <= 0x7e {
+				s.applyCSI(s.csiBuf)
+				s.csiBuf = s.csiBuf[:0]
+				s.escState = screenStateText
+			}
+		case screenStateOSC:
+			i++
+			if b == 0x07 {
+				s.escState = screenStateText
+				s.oscEsc = false
+				continue
+			}
+			if s.oscEsc && b == '\\' {
+				s.escState = screenStateText
+				s.oscEsc = false
+				continue
+			}
+			s.oscEsc = b == 0x1b
+		}
+	}
+}
+
+func (s *terminalScreen) applyCSI(seq []byte) {
+	if len(seq) == 0 {
+		return
+	}
+	final := seq[len(seq)-1]
+	params := string(seq[:len(seq)-1])
+	params = strings.TrimPrefix(params, "?")
+	values := parseCSIParams(params)
+
+	switch final {
+	case 'A':
+		s.row = clampInt(s.row-defaultCSIValue(values, 0, 1), 0, s.rows-1)
+	case 'B':
+		s.row = clampInt(s.row+defaultCSIValue(values, 0, 1), 0, s.rows-1)
+	case 'C':
+		s.col = clampInt(s.col+defaultCSIValue(values, 0, 1), 0, s.cols-1)
+	case 'D':
+		s.col = clampInt(s.col-defaultCSIValue(values, 0, 1), 0, s.cols-1)
+	case 'E':
+		s.row = clampInt(s.row+defaultCSIValue(values, 0, 1), 0, s.rows-1)
+		s.col = 0
+	case 'F':
+		s.row = clampInt(s.row-defaultCSIValue(values, 0, 1), 0, s.rows-1)
+		s.col = 0
+	case 'G':
+		s.col = clampInt(defaultCSIValue(values, 0, 1)-1, 0, s.cols-1)
+	case 'H', 'f':
+		s.row = clampInt(defaultCSIValue(values, 0, 1)-1, 0, s.rows-1)
+		s.col = clampInt(defaultCSIValue(values, 1, 1)-1, 0, s.cols-1)
+	case 'd':
+		s.row = clampInt(defaultCSIValue(values, 0, 1)-1, 0, s.rows-1)
+	case 'J':
+		s.eraseDisplay(defaultCSIValue(values, 0, 0))
+	case 'K':
+		s.eraseLine(defaultCSIValue(values, 0, 0))
+	case 'X':
+		count := defaultCSIValue(values, 0, 1)
+		for i := 0; i < count && s.col+i < s.cols; i++ {
+			s.cells[s.row][s.col+i] = ' '
+		}
+	case 'm':
+		// SGR styling does not affect text content.
+	case 's':
+		s.savedRow = s.row
+		s.savedCol = s.col
+	case 'u':
+		s.row = clampInt(s.savedRow, 0, s.rows-1)
+		s.col = clampInt(s.savedCol, 0, s.cols-1)
+	}
+}
+
+func (s *terminalScreen) eraseDisplay(mode int) {
+	switch mode {
+	case 1:
+		for r := 0; r <= s.row; r++ {
+			end := s.cols
+			if r == s.row {
+				end = s.col + 1
+			}
+			for c := 0; c < end && c < s.cols; c++ {
+				s.cells[r][c] = ' '
+			}
+		}
+	case 2:
+		for r := range s.cells {
+			for c := range s.cells[r] {
+				s.cells[r][c] = ' '
+			}
+		}
+	default:
+		for r := s.row; r < s.rows; r++ {
+			start := 0
+			if r == s.row {
+				start = s.col
+			}
+			for c := start; c < s.cols; c++ {
+				s.cells[r][c] = ' '
+			}
+		}
+	}
+}
+
+func (s *terminalScreen) eraseLine(mode int) {
+	switch mode {
+	case 1:
+		for c := 0; c <= s.col && c < s.cols; c++ {
+			s.cells[s.row][c] = ' '
+		}
+	case 2:
+		for c := 0; c < s.cols; c++ {
+			s.cells[s.row][c] = ' '
+		}
+	default:
+		for c := s.col; c < s.cols; c++ {
+			s.cells[s.row][c] = ' '
+		}
+	}
+}
+
+func (s *terminalScreen) writeRune(r rune) {
+	if s.rows == 0 || s.cols == 0 {
+		return
+	}
+	if s.col >= s.cols {
+		s.col = 0
+		s.lineFeed()
+	}
+	s.cells[s.row][s.col] = r
+	s.col++
+	if s.col >= s.cols {
+		s.col = 0
+		s.lineFeed()
+	}
+}
+
+func (s *terminalScreen) lineFeed() {
+	if s.row == s.rows-1 {
+		copy(s.cells[0:], s.cells[1:])
+		s.cells[s.rows-1] = make([]rune, s.cols)
+		for i := range s.cells[s.rows-1] {
+			s.cells[s.rows-1][i] = ' '
+		}
+		return
+	}
+	s.row++
+}
+
+func (s *terminalScreen) regionText(lastRows int) string {
+	if lastRows <= 0 || s.rows == 0 {
+		return ""
+	}
+	if lastRows > s.rows {
+		lastRows = s.rows
+	}
+	start := s.rows - lastRows
+	lines := make([]string, 0, lastRows)
+	for _, row := range s.cells[start:] {
+		line := strings.TrimRight(string(row), " ")
+		line = strings.TrimRight(line, "\x00")
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func newOutputMonitor(src io.Reader, dst io.Writer, events chan Event, capture *passthroughCapture, provider string, threshold int) *outputMonitor {
@@ -123,7 +469,18 @@ func newOutputMonitorWithOptions(src io.Reader, dst io.Writer, events chan Event
 		warnThreshold:   t.Warn,
 		weeklyThreshold: t.WeeklySwitch,
 		weeklyWarn:      t.WeeklyWarn,
+		screen:          newTerminalScreen(defaultScreenRows, defaultScreenCols),
 	}
+}
+
+func (m *outputMonitor) SetSize(rows, cols uint16) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.screen == nil {
+		m.screen = newTerminalScreen(int(rows), int(cols))
+		return
+	}
+	m.screen.resize(int(rows), int(cols))
 }
 
 // Run starts the pass-through monitoring loop. Blocks until src is closed.
@@ -164,6 +521,10 @@ func (m *outputMonitor) checkForRateLimit(data []byte) {
 		return
 	}
 
+	if m.screen != nil {
+		m.screen.apply(data)
+	}
+
 	// Strip ANSI escape codes for pattern matching
 	clean := stripAnsi(string(data))
 	m.buf.WriteString(clean)
@@ -189,26 +550,43 @@ func (m *outputMonitor) checkForRateLimit(data []byte) {
 	}
 
 	lower := strings.ToLower(text)
-
-	if evt := detectRateLimit(lower, m.provider, m.threshold, m.weeklyThreshold); evt != nil {
-		m.triggered = true
-		m.events <- *evt
-		return
+	screenText := ""
+	if m.screen != nil {
+		screenText = m.screen.regionText(screenRowsForProvider(m.provider))
 	}
+	screenLower := strings.ToLower(screenText)
 
-	if !m.warned && (m.warnThreshold > 0 || m.weeklyWarn > 0) {
-		if evt := detectRateLimitWarning(lower, m.provider, m.warnThreshold, m.threshold, m.weeklyWarn, m.weeklyThreshold); evt != nil {
-			m.warned = true
-			// Reset the scan buffer so the first-match regex in detectRateLimit
-			// isn't anchored to the stale warn-level percentage when the switch
-			// threshold is eventually crossed.
-			m.buf.Reset()
+	if evt := detectRateLimitFromSources(screenLower, lower, m.provider, m.threshold, m.weeklyThreshold); evt != nil {
+		if m.confirmStable(&m.pendingSwitch, evt) {
+			m.triggered = true
+			m.pendingWarn = nil
 			m.events <- *evt
 		}
+		return
 	}
+	m.pendingSwitch = nil
+
+	if !m.warned && (m.warnThreshold > 0 || m.weeklyWarn > 0) {
+		if evt := detectRateLimitWarningFromSources(screenLower, lower, m.provider, m.warnThreshold, m.threshold, m.weeklyWarn, m.weeklyThreshold); evt != nil {
+			if m.confirmStable(&m.pendingWarn, evt) {
+				m.warned = true
+				// Reset the scan buffer so the first-match regex in detectRateLimit
+				// isn't anchored to the stale warn-level percentage when the switch
+				// threshold is eventually crossed.
+				m.buf.Reset()
+				m.events <- *evt
+			}
+			return
+		}
+	}
+	m.pendingWarn = nil
 }
 
 func detectRateLimit(lower string, provider string, threshold, weeklyThreshold int) *Event {
+	return detectRateLimitFromSources(lower, lower, provider, threshold, weeklyThreshold)
+}
+
+func detectRateLimitFromSources(screenLower, lower string, provider string, threshold, weeklyThreshold int) *Event {
 	if threshold <= 0 || threshold > 100 {
 		threshold = defaultSwitchThreshold
 	}
@@ -222,7 +600,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 		// Check tasuki's structured Claude status line derived from rate_limits.
 		// Use the most-recent match — status lines are re-rendered in place and
 		// accumulate in the rolling scan buffer, so the latest value wins.
-		if matches := lastSubmatch(structuredRateLimitRegex, lower); len(matches) > 2 {
+		if matches := lastSubmatchFromSources(structuredRateLimitRegex, screenLower, lower); len(matches) > 2 {
 			if pct, ok := parseUsagePercent(matches[1]); ok && pct >= threshold {
 				return &Event{
 					Type:    EventRateLimit,
@@ -248,7 +626,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 		}
 
 		// Check usage percentage from Claude Code's built-in usage message.
-		if matches := lastSubmatch(usagePercentRegex, lower); len(matches) > 1 {
+		if matches := lastSubmatchFromSources(usagePercentRegex, screenLower, lower); len(matches) > 1 {
 			pct, err := strconv.Atoi(matches[1])
 			if err == nil && pct >= threshold {
 				return &Event{
@@ -263,7 +641,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 		}
 
 		// Check explicit session-limit reached messages.
-		if match := sessionLimitReachedRegex.FindString(lower); match != "" {
+		if match := findStringFromSources(sessionLimitReachedRegex, screenLower, lower); match != "" {
 			return &Event{
 				Type:    EventRateLimit,
 				Content: match,
@@ -280,7 +658,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 		// old redraws accumulate in the scan buffer and an occasional
 		// character drop ("5h 9% · wekly 83%") would otherwise fire on a
 		// stale fragment. lastSubmatch returns the final, freshest frame.
-		if matches := lastSubmatch(codexStatusRegex, lower); len(matches) >= 3 {
+		if matches := lastSubmatch(codexStatusRegex, screenLower); len(matches) >= 3 {
 			if fhRemaining, err := strconv.Atoi(matches[1]); err == nil {
 				if used := 100 - fhRemaining; used >= threshold {
 					return &Event{
@@ -317,7 +695,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 		// match preceded by "context" since modern Codex UI uses
 		// "Context N% left" for conversation-context usage — that's not a
 		// rate-limit signal.
-		if matches := findCodexRemainingMatch(lower); matches != nil {
+		if matches := findCodexRemainingMatch(screenLower); matches != nil {
 			remaining, err := strconv.Atoi(matches[1])
 			used := 100 - remaining
 			if err == nil && used >= threshold {
@@ -330,7 +708,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 				}
 			}
 		}
-		if matches := codexUsedRegex.FindStringSubmatch(lower); len(matches) > 1 {
+		if matches := firstSubmatchFromSources(codexUsedRegex, screenLower, lower); len(matches) > 1 {
 			if used, err := strconv.Atoi(matches[1]); err == nil {
 				cycle := ""
 				if strings.Contains(matches[0], "weekly") {
@@ -361,7 +739,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 
 	case "copilot":
 		// Copilot's context display is treated as used%.
-		if matches := copilotUsedRegex.FindStringSubmatch(lower); len(matches) > 2 {
+		if matches := firstSubmatchFromSources(copilotUsedRegex, screenLower, lower); len(matches) > 2 {
 			value := matches[1]
 			if value == "" {
 				value = matches[2]
@@ -377,7 +755,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 				}
 			}
 		}
-		if matches := copilotCompactionRegex.FindStringSubmatch(lower); len(matches) > 1 {
+		if matches := firstSubmatchFromSources(copilotCompactionRegex, screenLower, lower); len(matches) > 1 {
 			used, err := strconv.Atoi(matches[1])
 			if err == nil && used >= threshold {
 				return &Event{
@@ -393,7 +771,7 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 
 	// 5. Check explicit hard-limit phrases as a fallback when no provider-
 	// specific structured signal is available.
-	if match := findHardRateLimitMatch(lower); match != "" {
+	if match := findHardRateLimitMatchFromSources(screenLower, lower); match != "" {
 		return &Event{
 			Type:    EventRateLimit,
 			Content: match,
@@ -414,6 +792,10 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 // warn/switchT cover the 5h / generic window; weeklyWarn/weeklySwitch cover
 // the weekly window. A weekly threshold of 0 disables weekly warnings.
 func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, weeklySwitch int) *Event {
+	return detectRateLimitWarningFromSources(lower, lower, provider, warn, switchT, weeklyWarn, weeklySwitch)
+}
+
+func detectRateLimitWarningFromSources(screenLower, lower, provider string, warn, switchT, weeklyWarn, weeklySwitch int) *Event {
 	fiveHourEligible := warn > 0 && warn < switchT
 	weeklyEligible := weeklyWarn > 0 && weeklySwitch > 0 && weeklyWarn < weeklySwitch
 	if !fiveHourEligible && !weeklyEligible {
@@ -430,7 +812,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 
 	switch provider {
 	case "claude":
-		if matches := lastSubmatch(structuredRateLimitRegex, lower); len(matches) > 2 {
+		if matches := lastSubmatchFromSources(structuredRateLimitRegex, screenLower, lower); len(matches) > 2 {
 			if pct, ok := parseUsagePercent(matches[1]); ok && fiveHourInRange(pct) {
 				return &Event{
 					Type:    EventRateLimitWarning,
@@ -452,7 +834,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 				}
 			}
 		}
-		if matches := lastSubmatch(usagePercentRegex, lower); len(matches) > 1 {
+		if matches := lastSubmatchFromSources(usagePercentRegex, screenLower, lower); len(matches) > 1 {
 			if pct, err := strconv.Atoi(matches[1]); err == nil && fiveHourInRange(pct) {
 				return &Event{
 					Type:    EventRateLimitWarning,
@@ -465,7 +847,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 			}
 		}
 		if fiveHourEligible {
-			if match := usageWarningRegex.FindString(lower); match != "" {
+			if match := findStringFromSources(usageWarningRegex, screenLower, lower); match != "" {
 				return &Event{
 					Type:    EventRateLimitWarning,
 					Content: match,
@@ -478,7 +860,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 		}
 
 	case "codex":
-		if matches := lastSubmatch(codexStatusRegex, lower); len(matches) >= 3 {
+		if matches := lastSubmatch(codexStatusRegex, screenLower); len(matches) >= 3 {
 			if fhRemaining, err := strconv.Atoi(matches[1]); err == nil {
 				if used := 100 - fhRemaining; fiveHourInRange(used) {
 					return &Event{
@@ -504,7 +886,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 				}
 			}
 		}
-		if matches := codexUsedRegex.FindStringSubmatch(lower); len(matches) > 1 {
+		if matches := firstSubmatchFromSources(codexUsedRegex, screenLower, lower); len(matches) > 1 {
 			if used, err := strconv.Atoi(matches[1]); err == nil {
 				cycle := ""
 				if strings.Contains(matches[0], "weekly") {
@@ -530,7 +912,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 				}
 			}
 		}
-		if matches := findCodexRemainingMatch(lower); matches != nil {
+		if matches := findCodexRemainingMatch(screenLower); matches != nil {
 			if remaining, err := strconv.Atoi(matches[1]); err == nil && fiveHourInRange(100-remaining) {
 				return &Event{
 					Type:    EventRateLimitWarning,
@@ -543,7 +925,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 		}
 
 	case "copilot":
-		if matches := copilotUsedRegex.FindStringSubmatch(lower); len(matches) > 2 {
+		if matches := firstSubmatchFromSources(copilotUsedRegex, screenLower, lower); len(matches) > 2 {
 			value := matches[1]
 			if value == "" {
 				value = matches[2]
@@ -558,7 +940,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 				}
 			}
 		}
-		if matches := copilotCompactionRegex.FindStringSubmatch(lower); len(matches) > 1 {
+		if matches := firstSubmatchFromSources(copilotCompactionRegex, screenLower, lower); len(matches) > 1 {
 			if used, err := strconv.Atoi(matches[1]); err == nil && fiveHourInRange(used) {
 				return &Event{
 					Type:    EventRateLimitWarning,
@@ -580,6 +962,76 @@ func (m *outputMonitor) RecentOutput() string {
 	return summarizeRecentOutput(m.history.String(), 4000, 40)
 }
 
+func (m *outputMonitor) confirmStable(pending **pendingDetection, evt *Event) bool {
+	if evt == nil {
+		*pending = nil
+		return false
+	}
+	if !requiresStableObservation(evt) {
+		*pending = nil
+		return true
+	}
+
+	key := pendingKey(evt)
+	now := time.Now()
+	if *pending == nil || (*pending).key != key {
+		*pending = &pendingDetection{
+			key:       key,
+			firstSeen: now,
+			seenCount: 1,
+		}
+		return false
+	}
+
+	(*pending).seenCount++
+	if (*pending).seenCount >= statusStabilityCount || now.Sub((*pending).firstSeen) >= statusStabilityWindow {
+		*pending = nil
+		return true
+	}
+	return false
+}
+
+func requiresStableObservation(evt *Event) bool {
+	if evt == nil || evt.RateLimit == nil {
+		return false
+	}
+	switch evt.RateLimit.Type {
+	case "usage_warning", "session_limit_reached", "hard_limit", "codex_rate_limit":
+		return false
+	default:
+		return true
+	}
+}
+
+func pendingKey(evt *Event) string {
+	if evt == nil {
+		return ""
+	}
+	key := strconv.Itoa(int(evt.Type))
+	if evt.RateLimit != nil {
+		key += "|" + stabilitySignalKey(evt.RateLimit.Type) + "|" + evt.RateLimit.Cycle
+		return key
+	}
+	return key + "|" + evt.Content
+}
+
+func stabilitySignalKey(rateLimitType string) string {
+	switch {
+	case strings.HasPrefix(rateLimitType, "five_hour_"):
+		return "five_hour"
+	case strings.HasPrefix(rateLimitType, "seven_day_"):
+		return "seven_day"
+	case strings.HasPrefix(rateLimitType, "weekly_"):
+		return "weekly"
+	case strings.HasPrefix(rateLimitType, "usage_"):
+		return "usage"
+	case strings.HasPrefix(rateLimitType, "remaining_"):
+		return "remaining"
+	default:
+		return rateLimitType
+	}
+}
+
 // LooksLikeHardRateLimitText reports whether text contains an explicit hard
 // rate-limit message. This is shared by PTY monitoring and non-interactive
 // error handling so they interpret provider output consistently.
@@ -595,6 +1047,54 @@ func findHardRateLimitMatch(text string) string {
 		}
 	}
 	return ""
+}
+
+func findHardRateLimitMatchFromSources(screenLower, lower string) string {
+	for _, candidate := range []string{screenLower, lower} {
+		if match := findHardRateLimitMatch(candidate); match != "" {
+			return match
+		}
+	}
+	return ""
+}
+
+func lastSubmatchFromSources(re *regexp.Regexp, primary, fallback string) []string {
+	if matches := lastSubmatch(re, primary); len(matches) > 0 {
+		return matches
+	}
+	if fallback == primary {
+		return nil
+	}
+	return lastSubmatch(re, fallback)
+}
+
+func firstSubmatchFromSources(re *regexp.Regexp, primary, fallback string) []string {
+	if matches := re.FindStringSubmatch(primary); len(matches) > 0 {
+		return matches
+	}
+	if fallback == primary {
+		return nil
+	}
+	return re.FindStringSubmatch(fallback)
+}
+
+func findStringFromSources(re *regexp.Regexp, primary, fallback string) string {
+	if match := re.FindString(primary); match != "" {
+		return match
+	}
+	if fallback == primary {
+		return ""
+	}
+	return re.FindString(fallback)
+}
+
+func screenRowsForProvider(provider string) int {
+	switch provider {
+	case "codex":
+		return screenRowsCodexStatus
+	default:
+		return screenRowsGeneral
+	}
 }
 
 func appendBounded(dst *strings.Builder, chunk string, max int) {
@@ -680,6 +1180,61 @@ func parseUsagePercent(s string) (int, bool) {
 		return 0, false
 	}
 	return pct, true
+}
+
+func parseCSIParams(params string) []int {
+	if params == "" {
+		return nil
+	}
+	parts := strings.Split(params, ";")
+	values := make([]int, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			values = append(values, 0)
+			continue
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			values = append(values, 0)
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func defaultCSIValue(values []int, index, fallback int) int {
+	if index >= len(values) || values[index] == 0 {
+		return fallback
+	}
+	return values[index]
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func clampInt(v, lo, hi int) int {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // stripAnsi removes ANSI escape sequences from a string.

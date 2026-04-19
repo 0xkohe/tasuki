@@ -236,15 +236,33 @@ func TestDetectRateLimitForCodexStatusIgnoresCorruptedFragment(t *testing.T) {
 
 // Uses lastSubmatch semantics: the latest frame's 5h reading is what gets
 // compared. Buffer holds multiple past frames at safe values and one fresh
-// frame at 90% used — only the latter should trigger.
+// frame at 90% used — only the latter should trigger. The canonical codex
+// status line always sits after " · " (its prefix in the bottom bar), which
+// is what codexStatusRegex now requires.
 func TestDetectRateLimitForCodexStatusUsesLatestFrame(t *testing.T) {
-	buf := "5h 99% · weekly 83% 5h 99% · weekly 83% 5h 10% · weekly 83%"
+	frame := func(fh, wk string) string {
+		return "gpt-5.4 high · ~/path · 5h " + fh + "% · weekly " + wk + "%"
+	}
+	buf := frame("99", "83") + " " + frame("99", "83") + " " + frame("10", "83")
 	evt := detectRateLimit(buf, "codex", 80, 0)
 	if evt == nil {
 		t.Fatal("expected event from latest 5h frame")
 	}
 	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_10%" {
 		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+// A literal `5h N% · weekly N%` substring surfaced inside quoted source
+// code / transcript text must NOT trigger — the status-line detector only
+// trusts matches preceded by the canonical `·`/`|` separator or by start
+// of buffer. Reproduction: provider edits pty_test.go and the diff echoes
+// test fixture strings like the one below into the scan buffer.
+func TestDetectRateLimitForCodexStatusIgnoresSourceCodeLiteral(t *testing.T) {
+	buf := `   374 +       buf := "5h 15% · weekly 83% 5h 15% · weekly 83%"`
+	evt := detectRateLimit(buf, "codex", 80, 0)
+	if evt != nil {
+		t.Fatalf("expected no event from a quoted source-code literal, got %#v", evt)
 	}
 }
 
@@ -388,6 +406,13 @@ func TestOutputMonitorFiresWarningBeforeSwitch(t *testing.T) {
 	monitor.checkForRateLimit([]byte("claude limits 5h:85% 7d:10%"))
 	select {
 	case evt := <-events:
+		t.Fatalf("expected warning to remain pending after first observation, got %v", evt.Type)
+	default:
+	}
+
+	monitor.checkForRateLimit([]byte("claude limits 5h:85% 7d:10%"))
+	select {
+	case evt := <-events:
 		if evt.Type != EventRateLimitWarning {
 			t.Fatalf("expected warning, got %v", evt.Type)
 		}
@@ -407,11 +432,43 @@ func TestOutputMonitorFiresWarningBeforeSwitch(t *testing.T) {
 	monitor.checkForRateLimit([]byte("claude limits 5h:97% 7d:10%"))
 	select {
 	case evt := <-events:
+		t.Fatalf("expected switch to remain pending after first observation, got %v", evt.Type)
+	default:
+	}
+
+	monitor.checkForRateLimit([]byte("claude limits 5h:97% 7d:10%"))
+	select {
+	case evt := <-events:
 		if evt.Type != EventRateLimit {
 			t.Fatalf("expected rate limit, got %v", evt.Type)
 		}
 	default:
 		t.Fatal("expected rate limit event after crossing switch threshold")
+	}
+}
+
+func TestOutputMonitorStabilityAllowsUpdatedPercentages(t *testing.T) {
+	events := make(chan Event, 2)
+	monitor := newOutputMonitorWithWarn(strings.NewReader(""), io.Discard, events, nil, "claude", 95, 80)
+
+	monitor.checkForRateLimit([]byte("claude limits 5h:85% 7d:10%"))
+	select {
+	case evt := <-events:
+		t.Fatalf("expected warning to remain pending after first observation, got %v", evt.Type)
+	default:
+	}
+
+	monitor.checkForRateLimit([]byte("claude limits 5h:86% 7d:10%"))
+	select {
+	case evt := <-events:
+		if evt.Type != EventRateLimitWarning {
+			t.Fatalf("expected warning after a stable follow-up observation, got %v", evt.Type)
+		}
+		if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_86%" {
+			t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+		}
+	default:
+		t.Fatal("expected warning event after consecutive in-range redraws")
 	}
 }
 
@@ -442,6 +499,7 @@ func TestOutputMonitorSwitchFiresWithoutWarnStage(t *testing.T) {
 	monitor := newOutputMonitorWithWarn(strings.NewReader(""), io.Discard, events, nil, "claude", 95, 80)
 	// Going straight over the switch threshold must not also emit a warning.
 	monitor.checkForRateLimit([]byte("claude limits 5h:97% 7d:10%"))
+	monitor.checkForRateLimit([]byte("claude limits 5h:97% 7d:10%"))
 	var types []EventType
 	for {
 		select {
@@ -454,5 +512,35 @@ func TestOutputMonitorSwitchFiresWithoutWarnStage(t *testing.T) {
 	}
 	if len(types) != 1 || types[0] != EventRateLimit {
 		t.Fatalf("expected single rate-limit event, got %v", types)
+	}
+}
+
+func TestOutputMonitorHardLimitBypassesStabilityDelay(t *testing.T) {
+	events := make(chan Event, 2)
+	monitor := newOutputMonitor(strings.NewReader(""), io.Discard, events, nil, "claude", 95)
+	monitor.checkForRateLimit([]byte("Error: rate limit reached, please try again later"))
+	select {
+	case evt := <-events:
+		if evt.Type != EventRateLimit {
+			t.Fatalf("expected immediate rate limit event, got %v", evt.Type)
+		}
+	default:
+		t.Fatal("expected immediate hard-limit event")
+	}
+}
+
+func TestOutputMonitorCodexUsesBottomScreenRegion(t *testing.T) {
+	events := make(chan Event, 2)
+	monitor := newOutputMonitorWithOptions(strings.NewReader(""), io.Discard, events, nil, "codex", monitorThresholds{Switch: 80})
+	monitor.SetSize(6, 80)
+
+	monitor.checkForRateLimit([]byte(`buf := "5h 15% · weekly 83%"` + "\n"))
+	monitor.checkForRateLimit([]byte("\x1b[6;1Hgpt-5.4 high · ~/path · 5h 99% · weekly 83%"))
+	monitor.checkForRateLimit([]byte("\x1b[6;1Hgpt-5.4 high · ~/path · 5h 99% · weekly 83%"))
+
+	select {
+	case evt := <-events:
+		t.Fatalf("expected no event from a source literal outside the status region, got %#v", evt)
+	default:
 	}
 }

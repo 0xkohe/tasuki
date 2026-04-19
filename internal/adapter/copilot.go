@@ -109,6 +109,7 @@ func (c *Copilot) RunInteractive(ctx context.Context, workDir string, initialPro
 		WeeklySwitch: c.opts.WeeklySwitchThreshold,
 		WeeklyWarn:   c.opts.WeeklyWarnThreshold,
 	})
+	monitor.SetSize(rows, cols)
 	go monitor.Run()
 
 	go func() {
@@ -122,6 +123,7 @@ func (c *Copilot) RunInteractive(ctx context.Context, workDir string, initialPro
 		Events: events,
 		Done:   done,
 		Resize: func(rows, cols uint16) {
+			monitor.SetSize(rows, cols)
 			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 		},
 		Snapshot: func() PassthroughSnapshot {

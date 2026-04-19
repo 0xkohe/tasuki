@@ -141,6 +141,7 @@ func (c *Claude) RunInteractive(ctx context.Context, workDir string, initialProm
 		WeeklySwitch: c.opts.WeeklySwitchThreshold,
 		WeeklyWarn:   c.opts.WeeklyWarnThreshold,
 	})
+	monitor.SetSize(rows, cols)
 	go monitor.Run()
 
 	// Wait for process exit
@@ -156,6 +157,7 @@ func (c *Claude) RunInteractive(ctx context.Context, workDir string, initialProm
 		Events: events,
 		Done:   done,
 		Resize: func(rows, cols uint16) {
+			monitor.SetSize(rows, cols)
 			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 		},
 		Snapshot: func() PassthroughSnapshot {

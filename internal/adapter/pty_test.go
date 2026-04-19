@@ -222,6 +222,42 @@ func TestDetectRateLimitForCodexStatusSkipsWeeklyWhenDisabled(t *testing.T) {
 	}
 }
 
+// Regression guard: a corrupted redraw like "5h 9% · wekly 83%" (drop of a
+// single character inside "99" and "weekly" due to a chunk-boundary /
+// rendering hiccup) must not match codexStatusRegex — the fresh, canonical
+// "5h 99% · weekly 83%" frame that follows should take precedence.
+func TestDetectRateLimitForCodexStatusIgnoresCorruptedFragment(t *testing.T) {
+	buf := "5h 99% · weekly 83% ... 5h 9% · wekly 83% ... 5h 99% · weekly 83%"
+	evt := detectRateLimit(buf, "codex", 25, 0)
+	if evt != nil {
+		t.Fatalf("expected no event — corrupted fragment must be ignored, got %#v", evt)
+	}
+}
+
+// Uses lastSubmatch semantics: the latest frame's 5h reading is what gets
+// compared. Buffer holds multiple past frames at safe values and one fresh
+// frame at 90% used — only the latter should trigger.
+func TestDetectRateLimitForCodexStatusUsesLatestFrame(t *testing.T) {
+	buf := "5h 99% · weekly 83% 5h 99% · weekly 83% 5h 10% · weekly 83%"
+	evt := detectRateLimit(buf, "codex", 80, 0)
+	if evt == nil {
+		t.Fatal("expected event from latest 5h frame")
+	}
+	if evt.RateLimit == nil || evt.RateLimit.Type != "five_hour_10%" {
+		t.Fatalf("unexpected rate limit info: %#v", evt.RateLimit)
+	}
+}
+
+// The modern Codex UI shows "Context N% left" for conversation-context
+// usage, which is unrelated to the rate-limit budget. A high context usage
+// (few % left) must not be treated as a rate-limit trigger.
+func TestDetectRateLimitForCodexIgnoresContextLeftPrefix(t *testing.T) {
+	evt := detectRateLimit("gpt-5.4 high · context 5% left", "codex", 80, 0)
+	if evt != nil {
+		t.Fatalf("expected no event from context-usage signal, got %#v", evt)
+	}
+}
+
 func TestDetectRateLimitForCodexExplicitUsedStatus(t *testing.T) {
 	evt := detectRateLimit("used 82% of the weekly usage already", "codex", 80, 80)
 	if evt == nil {

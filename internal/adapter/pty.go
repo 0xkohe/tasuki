@@ -33,13 +33,20 @@ var usagePercentRegex = regexp.MustCompile(`you've used (\d+)% of your(?: [a-z]+
 var structuredRateLimitRegex = regexp.MustCompile(`claude limits 5h:(\d+|na)% 7d:(\d+|na)%`)
 
 // codexRemainingRegex matches older Codex status text like "47% left".
+// Callers must guard against matches preceded by "context" — the modern
+// Codex UI uses "Context N% left" for conversation-context usage, which is
+// unrelated to the rate-limit budget this detector tracks.
 var codexRemainingRegex = regexp.MustCompile(`(?:^|[\s|·])(\d+)% left(?:\b|$)`)
 
 // codexUsedRegex matches Codex warnings like "used 75% of the weekly usage already".
 var codexUsedRegex = regexp.MustCompile(`used (\d+)% of (?:the )?(?:weekly |5h |five-hour )?usage`)
 
-// codexStatusRegex matches Codex status text like "5h 48% · weekly 74%".
-var codexStatusRegex = regexp.MustCompile(`(5h|weekly)\s+(\d+)%`)
+// codexStatusRegex matches the full Codex status line, e.g.
+// "5h 48% · weekly 74%". Requiring both windows in a canonical arrangement
+// keeps a partially corrupted redraw in the scan buffer from false-firing:
+// intermittent ANSI / chunk-boundary hiccups can drop characters
+// ("5h 9% · wekly 83%") and a looser pattern happily matches the fragment.
+var codexStatusRegex = regexp.MustCompile(`(?i)5h\s+(\d+)%\s*[·|]\s*weekly\s+(\d+)%`)
 
 // usageWarningRegex matches Claude Code warnings such as:
 // "Approaching usage limit · resets at 10am"
@@ -269,43 +276,35 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 
 	case "codex":
 		// Current Codex UI status line shows remaining budget like
-		// "5h 81% · weekly 89%". Convert that to used% so the configured
-		// threshold keeps the same meaning as other providers.
-		if matches := codexStatusRegex.FindAllStringSubmatch(lower, -1); len(matches) > 0 {
-			for _, match := range matches {
-				if len(match) < 3 {
-					continue
-				}
-				remaining, err := strconv.Atoi(match[2])
-				if err != nil {
-					continue
-				}
-				used := 100 - remaining
-				effectiveT := threshold
-				typeName := "usage_" + match[2] + "%"
-				cycle := ""
-				if match[1] == "5h" {
-					typeName = "five_hour_" + match[2] + "%"
-					cycle = "5h"
-				}
-				if match[1] == "weekly" {
-					if weeklyThreshold <= 0 {
-						continue
+		// "5h 81% · weekly 89%". We only trust the most-recent full match:
+		// old redraws accumulate in the scan buffer and an occasional
+		// character drop ("5h 9% · wekly 83%") would otherwise fire on a
+		// stale fragment. lastSubmatch returns the final, freshest frame.
+		if matches := lastSubmatch(codexStatusRegex, lower); len(matches) >= 3 {
+			if fhRemaining, err := strconv.Atoi(matches[1]); err == nil {
+				if used := 100 - fhRemaining; used >= threshold {
+					return &Event{
+						Type:    EventRateLimit,
+						Content: matches[0],
+						RateLimit: &RateLimitInfo{
+							Type:  "five_hour_" + matches[1] + "%",
+							Cycle: "5h",
+						},
 					}
-					effectiveT = weeklyThreshold
-					typeName = "weekly_" + match[2] + "%"
-					cycle = "weekly"
 				}
-				if used < effectiveT {
-					continue
-				}
-				return &Event{
-					Type:    EventRateLimit,
-					Content: match[0],
-					RateLimit: &RateLimitInfo{
-						Type:  typeName,
-						Cycle: cycle,
-					},
+			}
+			if weeklyThreshold > 0 {
+				if wkRemaining, err := strconv.Atoi(matches[2]); err == nil {
+					if used := 100 - wkRemaining; used >= weeklyThreshold {
+						return &Event{
+							Type:    EventRateLimit,
+							Content: matches[0],
+							RateLimit: &RateLimitInfo{
+								Type:  "weekly_" + matches[2] + "%",
+								Cycle: "weekly",
+							},
+						}
+					}
 				}
 			}
 		}
@@ -314,8 +313,11 @@ func detectRateLimit(lower string, provider string, threshold, weeklyThreshold i
 		// so the configured threshold keeps the same meaning as other providers:
 		// threshold=80 means "switch after 80% used", i.e. at 20% left.
 		// No cycle metadata on this signal — always compared against the 5h
-		// threshold (weekly monitoring opt-in doesn't apply here).
-		if matches := codexRemainingRegex.FindStringSubmatch(lower); len(matches) > 1 {
+		// threshold (weekly monitoring opt-in doesn't apply here). Skip any
+		// match preceded by "context" since modern Codex UI uses
+		// "Context N% left" for conversation-context usage — that's not a
+		// rate-limit signal.
+		if matches := findCodexRemainingMatch(lower); matches != nil {
 			remaining, err := strconv.Atoi(matches[1])
 			used := 100 - remaining
 			if err == nil && used >= threshold {
@@ -476,38 +478,29 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 		}
 
 	case "codex":
-		if matches := codexStatusRegex.FindAllStringSubmatch(lower, -1); len(matches) > 0 {
-			for _, match := range matches {
-				if len(match) < 3 {
-					continue
+		if matches := lastSubmatch(codexStatusRegex, lower); len(matches) >= 3 {
+			if fhRemaining, err := strconv.Atoi(matches[1]); err == nil {
+				if used := 100 - fhRemaining; fiveHourInRange(used) {
+					return &Event{
+						Type:    EventRateLimitWarning,
+						Content: matches[0],
+						RateLimit: &RateLimitInfo{
+							Type:  "five_hour_" + matches[1] + "%",
+							Cycle: "5h",
+						},
+					}
 				}
-				remaining, err := strconv.Atoi(match[2])
-				if err != nil {
-					continue
-				}
-				used := 100 - remaining
-				cycle := ""
-				typeName := "usage_" + match[2] + "%"
-				var eligible bool
-				if match[1] == "5h" {
-					cycle = "5h"
-					typeName = "five_hour_" + match[2] + "%"
-					eligible = fiveHourInRange(used)
-				} else if match[1] == "weekly" {
-					cycle = "weekly"
-					typeName = "weekly_" + match[2] + "%"
-					eligible = weeklyInRange(used)
-				}
-				if !eligible {
-					continue
-				}
-				return &Event{
-					Type:    EventRateLimitWarning,
-					Content: match[0],
-					RateLimit: &RateLimitInfo{
-						Type:  typeName,
-						Cycle: cycle,
-					},
+			}
+			if wkRemaining, err := strconv.Atoi(matches[2]); err == nil {
+				if used := 100 - wkRemaining; weeklyInRange(used) {
+					return &Event{
+						Type:    EventRateLimitWarning,
+						Content: matches[0],
+						RateLimit: &RateLimitInfo{
+							Type:  "weekly_" + matches[2] + "%",
+							Cycle: "weekly",
+						},
+					}
 				}
 			}
 		}
@@ -537,7 +530,7 @@ func detectRateLimitWarning(lower, provider string, warn, switchT, weeklyWarn, w
 				}
 			}
 		}
-		if matches := codexRemainingRegex.FindStringSubmatch(lower); len(matches) > 1 {
+		if matches := findCodexRemainingMatch(lower); matches != nil {
 			if remaining, err := strconv.Atoi(matches[1]); err == nil && fiveHourInRange(100-remaining) {
 				return &Event{
 					Type:    EventRateLimitWarning,
@@ -638,6 +631,33 @@ func summarizeRecentOutput(text string, maxChars int, maxLines int) string {
 		return summary
 	}
 	return summary[len(summary)-maxChars:]
+}
+
+// findCodexRemainingMatch finds the most recent "N% left" reading in the
+// rolling scan buffer, while excluding hits that belong to Codex's
+// conversation-context UI ("Context N% left"). Context usage is tracked by
+// Codex separately from the rate-limit budget and must not trigger failover.
+func findCodexRemainingMatch(lower string) []string {
+	indexes := codexRemainingRegex.FindAllStringSubmatchIndex(lower, -1)
+	if len(indexes) == 0 {
+		return nil
+	}
+	for i := len(indexes) - 1; i >= 0; i-- {
+		idx := indexes[i]
+		start := idx[0]
+		windowStart := start - 16
+		if windowStart < 0 {
+			windowStart = 0
+		}
+		if strings.Contains(lower[windowStart:start], "context") {
+			continue
+		}
+		return []string{
+			lower[idx[0]:idx[1]],
+			lower[idx[2]:idx[3]],
+		}
+	}
+	return nil
 }
 
 // lastSubmatch returns the last submatch of re against s, or nil if no match.

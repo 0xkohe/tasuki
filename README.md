@@ -55,11 +55,6 @@ cd path/to/your/project
 tasuki
 ```
 
-Once configured, pass a prompt as arguments to start an interactive session:
-
-```sh
-tasuki "refactor the auth middleware and add tests"
-```
 
 If the active provider hits its switch threshold, `tasuki` transparently
 migrates the session to the next-priority provider that is not in cooldown.
